@@ -7,7 +7,7 @@ made along the way.
 **Status: all nine stages built and validated end-to-end.** A single command
 turns a live arXiv window into an upload-ready episode: **`episode.mp4` (4.9 min,
 1920x1080 H.264), three standalone segments, a thumbnail, and metadata with
-chapter timestamps** — for **$1.96**.
+chapter timestamps** — for **$1.73**.
 
 | Stage | Status | Validated against |
 |---|---|---|
@@ -16,13 +16,14 @@ chapter timestamps** — for **$1.96**.
 | 3 enrich | done | 21 real papers end-to-end, 9 real e-prints parsed |
 | 4 rank | done | **live**, 15 real candidates, $0.102 |
 | 5 extract | done | **live**, 3 digests, 12/12 results traceable, $0.146 |
-| 6 script | done | **live**, 3 segments + wrapper, 284s, $0.090 |
-| 7 voice | done | **live**, 27 clips, ElevenLabs Bella, $0.469 |
+| 6 script | done | **live**, 3 segments + wrapper, 284s est, $0.090 |
+| 7 voice | done | **live**, 27 clips, ElevenLabs Bella, 291s measured, $0.469 |
 | 8 render | done | **live**, 5 parts stitched, crossfades, <30ms A/V drift |
 | 9 package | done | **live**, episode + segments + thumbnail + chapters |
 
-A full run (1,225 papers → 15 shortlisted → 15 enriched → 3 finalists → 3 digests
-→ a 4.7-minute episode script) costs **$1.26** and takes about 6 minutes.
+A full run is 1,225 papers → 15 shortlisted → 15 enriched → 3 finalists →
+3 digests → a scripted, narrated, rendered episode. About 10 minutes end to end,
+most of it arXiv rate limiting and ffmpeg.
 
 ## Setup
 
@@ -87,7 +88,7 @@ Every billed call goes through `MeteredClient`, which prices it against
 crashes still leaves an accurate partial trail. Exceeding `budget.ceiling_usd`
 aborts the run.
 
-Measured cost of a full run on a real 1,225-paper window:
+Cost of one clean pass over a real 1,225-paper window:
 
 | Stage | Calls | Cost | Target |
 |---|---|---|---|
@@ -97,7 +98,12 @@ Measured cost of a full run on a real 1,225-paper window:
 | extract | 3 | $0.146 | $6.00 |
 | script | 4 | $0.090 | $3.00 |
 | voice | 27 | $0.469 | $1.00 |
-| **total** | **~100** | **$1.96** | ceiling $3.00 |
+| **per episode** | **97** | **$1.728** | ceiling $3.00 |
+
+`runs/2026-08-07/` itself reports **$1.96 over 158 calls** — higher because
+extract and script were each re-run once and narration three times (once per TTS
+engine tried). The report is cumulative per run by design (D23), so it records
+development iteration as well as the shipped pass.
 
 Stages 3, 8 and 9 make no billed calls at all: enrichment is downloads and
 parsing; rendering and packaging are Pillow + ffmpeg. Narration is the only
@@ -111,14 +117,17 @@ it reflects the whole run rather than the last invocation (D23).
 > underestimated. That leaves only 8% headroom against the $1.00 target, so a
 > heavier window would breach it.
 
-`pricing.yaml` is verified for the two models in use (`claude-haiku-4-5` $1/$5,
-`claude-sonnet-4-5` $3/$15). `budget.ceiling_usd` is **2.0**, and is enforced
-**per run, not per session**.
+`pricing.yaml` is verified for the two LLM models in use (`claude-haiku-4-5`
+$1/$5, `claude-sonnet-4-5` $3/$15). The **audio** prices are not verified — they
+came from the initial scaffold, and `pricing.yaml` says so.
+
+`budget.ceiling_usd` is **3.0**, enforced **per run and cumulative across
+invocations**: resuming with `--from` does not grant a fresh budget.
 
 ## Tests
 
 ```bash
-pytest        # 159 tests, no network, no API spend, no ffmpeg needed
+pytest        # 139 tests, no network, no API spend, no ffmpeg needed
 ruff check .
 ```
 

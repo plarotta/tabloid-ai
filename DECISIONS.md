@@ -69,6 +69,10 @@ from the script's `est_seconds`.
 
 **Open:** the actual engine. Blocks Phase 4, not Phases 1–3.
 
+**Resolved by D19, then D22:** ElevenLabs `eleven_turbo_v2_5`, voice Bella, after
+both macOS engines were rejected in review. The interface-first approach paid
+off — swapping engines was a config change, not a refactor.
+
 ---
 
 ## D4 - arXiv: hand-rolled Atom client over HTTPS
@@ -124,6 +128,10 @@ is flat, because the abstracts themselves (~490k input tokens) dominate and do n
 shrink with batch size. 20 is chosen over 40 because larger batches degrade
 per-paper scoring attention and increase the blast radius of one truncated JSON
 response.
+
+**Superseded by D15: the measured figure is $0.921, not $0.77** — output tokens
+were underestimated, leaving 8% headroom rather than 23%. The reasoning below
+stands; the number does not.
 
 **This is thin.** $0.77 against a $1.00 target is 23% headroom, and the 1,745-paper
 window measured in D5 would breach it. Mitigations, in order of preference if it
@@ -315,10 +323,10 @@ Unparseable JSON is converted to `StageError`, not left as `LLMError`: the CLI
 catches `StageError` and prints a clear message, where an `LLMError` would reach
 the user as a traceback. "Fail loudly" in the spec means legibly, not noisily.
 
-**Not yet validated against a live model** — no API key is configured. Logic is
-covered by 15 tests against a fake LLM, including hallucinated IDs, duplicates,
-truncated output and total provider failure. The prompt's *judgement* quality is
-unverified until a key exists.
+~~**Not yet validated against a live model** — no API key is configured.~~
+**Superseded by D16:** ranked live on 15 real candidates for $0.102. Logic
+remains covered by 15 fake-LLM tests (hallucinated IDs, duplicates, truncated
+output, total provider failure); D16 records what the live run showed.
 
 ---
 
@@ -696,12 +704,14 @@ double-counting.
 
 ## Deferred — not yet decided
 
-| ID | Decision | Spec | Blocks |
+All nine stages are built, so nothing below blocks producing an episode by hand.
+
+| ID | Decision | Spec | Status |
 |---|---|---|---|
-| — | **Scheduling**: GitHub Actions vs split local render | §5 | Phase 5 |
-| — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21) |
-| — | **Voice engine** | §3 Stage 7, §8 Q2 | **Owner action**: local voices are capped (D21). Download macOS Premium voices, or add an OpenAI/ElevenLabs key. |
-| — | **Branding / series name** | §8 Q3 | Phase 3 (needed for title cards) |
+| — | **Scheduling**: GitHub Actions vs split local render | §5 | **The only unbuilt spec item.** A runner needs `ffmpeg` and `ELEVENLABS_API_KEY`; the spec flags render as possibly too heavy for Actions and suggests splitting. |
+| — | **Advancing `state.json`** | §3 Stage 1 | Still pinned, so consecutive runs re-cover the same window. Should move only once an episode is actually published. |
+| — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21). |
+| — | **Branding / series name** | §8 Q3 | Never asked. Title cards currently carry the paper's own hook and no series identity, which works but is anonymous. |
 
 ## Prompt changelog
 

@@ -93,9 +93,17 @@ bugs, all since fixed and covered by regression tests:
 | `\cite{}` removal left a space | `"robustness to noise ."` | demo 2, intro panel |
 | PDF fallback returning slivers | median figure 1057×249 | demo 1, figure sample |
 
-## Caveat
+## What they do and don't cover
 
-Stages 2 (shortlist) and 4 (rank) need an LLM API key, which is **not
-configured**. They have never run live, and the demos say so rather than
-implying otherwise. Demos 2 and 3 cover Stage 3, which is the stage with the
-most surface area for silent wrongness.
+Written during Phase 2, when only stages 1 and 3 had run live. All nine stages
+have since run on real data, so the demos no longer show a half-finished
+pipeline — but they were never extended past Stage 3 either:
+
+- **Covered:** the fetch window (demo 1), and Stage 3 enrichment in depth
+  (demos 2 and 3) — the stage with the most surface area for silent wrongness.
+- **Not covered:** digests, scripts, narration and rendered video. Those have
+  their own review surfaces: `runs/<date>/script/*.md` for the scripts, and the
+  rendered `.mp4` files themselves.
+
+Demo 1 still cross-checks `calls.jsonl` before claiming an LLM stage ran, so it
+stays honest if pointed at a run where one was hand-seeded.
