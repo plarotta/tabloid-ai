@@ -1,0 +1,68 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/Nft43YK+Ody/CCAYn4l7tZ/ezUs</id>
+  <title>arXiv Query: search_query=(cat:cs.LG OR cat:cs.CL) AND submittedDate:"202608030000 TO 202608070000"&amp;id_list=&amp;start=0&amp;max_results=2</title>
+  <updated>2026-08-08T00:11:53Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=(cat:cs.LG+OR+cat:cs.CL)+AND+submittedDate:%22202608030000+TO+202608070000%22&amp;start=0&amp;max_results=2&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <opensearch:totalResults>895</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2608.06377v1</id>
+    <title>Learning When to Trust via Selective Context Preference Optimization</title>
+    <updated>2026-08-06T17:59:58Z</updated>
+    <link href="https://arxiv.org/abs/2608.06377v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2608.06377v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Language models increasingly condition their answers on external signals, and a single misleading one can turn a correct answer wrong. The obvious remedy, training models to resist such signals, hides a failure mode: a model that ignores all context looks robust yet is useless when the context is worth trusting. We recast the problem as selective trust and introduce MIST, a human-annotated benchmark that renders each reasoning item under four matched conditions (clean, misleading, correct-context, and irrelevant-context), together with SC2W, a paired metric counting how often a misleading signal flips a clean-correct answer to wrong. Across a comprehensive benchmark study, we observe that such a susceptibility is universal. We then propose SCOPE, which mines clean-correct/misleading-wrong failures and optimizes a standard Direct Preference Optimization (DPO) objective over matched preference pairs balanced equally across all four conditions, rather than over misleading items alone. Our approach substantially reduces SC2W on popular open-sourced models while preserving accuracy when the added context is clean, correct, or irrelevant. With this work, we argue that models should be judged on selective trust, not on resistance alone.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-08-06T17:59:58Z</published>
+    <arxiv:comment>Project Page at https://worldbench.github.io/scope GitHub Repo at https://github.com/worldbench/SCOPE HF Dataset at https://huggingface.co/datasets/worldbench/MIST-Bench</arxiv:comment>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Xian Sun</name>
+    </author>
+    <author>
+      <name>Wei Chow</name>
+    </author>
+    <author>
+      <name>Yingshuo Wang</name>
+    </author>
+    <author>
+      <name>Junhao Liu</name>
+    </author>
+    <author>
+      <name>Wei Gao</name>
+    </author>
+    <author>
+      <name>Qing Wu</name>
+    </author>
+    <author>
+      <name>Lingdong Kong</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2608.06370v1</id>
+    <title>The Bitter Lesson of Tool Calling</title>
+    <updated>2026-08-06T17:58:32Z</updated>
+    <link href="https://arxiv.org/abs/2608.06370v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2608.06370v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Tool use transforms LLMs into agents that act beyond their training data, and for code-capable models, programmatic tool calling extends this further by replacing rigid JSON calls with scripts that chain and parallelize naturally. However, a systematic evaluation of tools as code on an established benchmark across current and prior model generations under real-world task conditions has not been conducted. In this work, we empirically compare programmatic tool calling (PTC) to native JSON tool calling across 14 language models on BFCL v4. In the programmatic tool calling paradigm, tools are exposed as typed Python stubs that the model invokes through code, with execution and results handled in a single agent turn. Programmatic tool calling matches or exceeds native JSON tool calling in 11 of 14 models on BFCL v4, with the GPT-5.6 family achieving a 10.6% improvement over the JSON tool calling baseline. Further, it matches or outperforms baseline in 13 of 14 models under parallel fan-out, and holds stable under context rot conditions where baseline degrades 2.3% on average. Our results demonstrate that programmatic tool calling is a viable and robust alternative to JSON tool calling, with performance tracking model capability across release generations.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-08-06T17:58:32Z</published>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Ishan Patel</name>
+    </author>
+    <author>
+      <name>Sahil Sen</name>
+    </author>
+    <author>
+      <name>Elias Lumer</name>
+    </author>
+    <author>
+      <name>Vamse Kumar Subbiah</name>
+    </author>
+  </entry>
+</feed>
