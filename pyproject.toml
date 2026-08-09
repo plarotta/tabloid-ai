@@ -19,7 +19,21 @@ dependencies = [
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 groq = ["groq>=0.11"]
-all = ["anthropic>=0.40", "openai>=1.50", "groq>=0.11"]
+# Stage 10. Only needed to actually upload - the dry-run path, and its tests,
+# import none of this.
+youtube = [
+    "google-api-python-client>=2.140",
+    "google-auth>=2.34",
+    "google-auth-oauthlib>=1.2",
+]
+all = [
+    "anthropic>=0.40",
+    "openai>=1.50",
+    "groq>=0.11",
+    "google-api-python-client>=2.140",
+    "google-auth>=2.34",
+    "google-auth-oauthlib>=1.2",
+]
 
 [project.scripts]
 pipeline = "pipeline.cli:app"

@@ -26,6 +26,7 @@ STAGE_ORDER = [
 	"voice",
 	"render",
 	"package",
+	"upload",
 ]
 
 
@@ -60,6 +61,13 @@ class RunPaths:
 	@property
 	def output_dir(self) -> Path:
 		return self.stage_dir("output")
+
+	# Stage 10. Lives beside the bundle it published rather than in an `upload/`
+	# stage dir, because it is the record of what happened to *that* bundle - and
+	# the spec names this path.
+	@property
+	def upload_json(self) -> Path:
+		return self.output_dir / "upload.json"
 
 	def paper_fulltext(self, arxiv_id: str) -> Path:
 		"""Whole-paper prose captured by Stage 3, read by Stage 5."""

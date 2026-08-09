@@ -124,3 +124,33 @@ render:
   # this to true. See DECISIONS.md D21.
   background_music: false
   music_db: -18.0
+
+# Stage 10. Off = dry-run: the stage validates the bundle and writes the exact
+# request body it would send to output/upload.json, without calling YouTube.
+# Leave it off until the Google Cloud project passes the YouTube API compliance
+# audit - until then uploads are locked to private and publishAt is ignored
+# (SPEC.md Stage 10, DECISIONS.md D24).
+upload:
+  enabled: false
+  # publishAt only works on a private video; that pairing is the scheduled
+  # publish idiom.
+  privacy_status: private
+  publish_time_local: "12:00"
+  timezone: America/New_York
+  # 28 = Science & Technology.
+  category_id: "28"
+  tags:
+    - AI
+    - machine learning
+    - arXiv
+    - research papers
+    - deep learning
+  made_for_kids: false
+  language: en
+  # If the run finishes after the publish slot, schedule this far out instead of
+  # missing the day (DECISIONS.md D24 "Late runs").
+  late_publish_grace_minutes: 15
+  chunk_size_mb: 8
+  max_retries: 5
+  poll_timeout_seconds: 900
+  poll_interval_seconds: 20

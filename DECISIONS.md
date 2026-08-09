@@ -702,14 +702,67 @@ double-counting.
 
 ---
 
+## D24 - Stage 10 upload: dry-run is the product, the live path is the appendix
+
+Stage 10 is the first stage that cannot be finished by writing code. Uploads from
+an unverified Google Cloud project are locked to private until the project passes
+a YouTube API compliance audit — 2–4 weeks of someone else's calendar. So the
+stage was built for the state it will actually be in for the next month: off.
+
+**Dry-run is not a stub.** With `upload.enabled: false` (the checked-in default)
+the stage resolves the real bundle, applies every YouTube-side limit, computes
+the real `publishAt`, and writes the exact `videos.insert` body it would send to
+`output/upload.json`. Enabling uploads adds the network call and nothing else.
+Run against the 2026-08-07 episode it produced a reviewable body in one pass:
+11.5 MB `episode.mp4`, private, `containsSyntheticMedia: true`, category 28.
+
+**Scope is `youtube.upload` and nothing else.** The spec asks for the narrowest
+scope, and a narrow scope is an easier audit. It covers `videos.insert` and
+`thumbnails.set` but is *not* documented to authorise `videos.list` — which the
+spec also asks for, to poll until processed. Rather than widening the scope for a
+verification step, a 403 on the poll records `processing_status: "unverified"`
+and warns. The upload already succeeded by then; failing there would be a lie
+about what happened.
+
+**Write ordering is the real design.** `insert` → **write `upload.json`** →
+thumbnail → poll → rewrite. The video ID hits disk the instant it exists, before
+anything else can throw, because the failure this stage must never produce is a
+published video whose ID was lost — that is precisely what makes the next run
+publish the episode a second time. Everything after `insert` degrades to a
+warning: a missing thumbnail or an unconfirmed poll is not worth failing a run
+that already put a video on YouTube. A test kills the process between `insert`
+and the poll and asserts the ID survived.
+
+**The audit's symptom is detected, not just documented.** An unverified project
+accepts the upload and silently drops `publishAt`. If the video comes back with
+no scheduled publish time, the stage says so in as many words, because otherwise
+a green run means a video that will never publish.
+
+**Late runs still publish that day.** If a run finishes after the 12:00 ET slot,
+scheduling in the past is not an option and skipping the day is worse, so it
+schedules `late_publish_grace_minutes` (default 15) out and warns. The 2026-08-07
+bundle is two days stale, so the first real dry-run exercised exactly this path.
+
+**Dependencies stay optional.** `google-api-python-client` and friends live in a
+`[youtube]` extra, imported lazily. The dry-run path and all 37 new tests import
+none of them; the client's retry and resume logic is tested against a fake
+`googleapiclient` injected into `sys.modules`, and the stage's policy against a
+fake client. The suite cannot publish a video even by accident.
+
+Also added: `pipeline youtube-auth`, the one-time interactive OAuth flow that
+prints the refresh token every later run consumes non-interactively.
+
+---
+
 ## Deferred — not yet decided
 
-All nine stages are built, so nothing below blocks producing an episode by hand.
+All ten stages are built. Nothing below blocks producing an episode; the audit
+blocks publishing one automatically.
 
 | ID | Decision | Spec | Status |
 |---|---|---|---|
-| — | **YouTube compliance audit** | §3 Stage 10 | **Owner action, on the critical path.** ~2-4 week lead time and no code dependency, so it gates the first public publish regardless of when Stage 10 is written. The spec says submit it during Phase 1; Phases 1-5 are done and it has not been started. |
-| — | **Stage 10 — Upload** | §3 Stage 10 | Added to the spec 2026-08-09, not built. Ships behind `upload.enabled: false` (dry-run) so it can land before the audit clears. |
+| — | **YouTube compliance audit** | §3 Stage 10 | **Owner action, and now the only thing on the critical path.** ~2-4 week lead time and no code dependency. The spec says submit it during Phase 1; Phases 1-6 are done and it has not been started. Stage 10 stays in dry-run until it clears. |
+| — | **Channel + OAuth client** | §3 Stage 10 | Prerequisite for the audit and for `pipeline youtube-auth`: a Google Cloud project with the YouTube Data API enabled and a Desktop-app OAuth client. Not created. |
 | — | **Scheduling**: GitHub Actions vs split local render | §5 | A runner needs `ffmpeg` and `ELEVENLABS_API_KEY`; the spec flags render as possibly too heavy for Actions and suggests splitting. |
 | — | **Advancing `state.json`** | §3 Stage 1 | Still pinned, so consecutive runs re-cover the same window. Should move only once an episode is actually published. |
 | — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21). |

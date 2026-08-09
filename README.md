@@ -4,11 +4,11 @@ Automated pipeline that turns the week's notable arXiv AI/ML papers into a 3-5
 minute video. `SPEC.md` is the full design; `DECISIONS.md` records every choice
 made along the way.
 
-**Status: stages 1-9 built and validated end-to-end; Stage 10 (upload) is
-specified but not built.** A single command turns a live arXiv window into an
-upload-ready episode: **`episode.mp4` (4.9 min,
-1920x1080 H.264), three standalone segments, a thumbnail, and metadata with
-chapter timestamps** — for **$1.73**.
+**Status: all ten stages built. Stages 1-9 validated end-to-end against live
+APIs; Stage 10 (upload) runs in dry-run until a YouTube compliance audit
+clears.** A single command turns a live arXiv window into an upload-ready
+episode: **`episode.mp4` (4.9 min, 1920x1080 H.264), three standalone segments, a
+thumbnail, and metadata with chapter timestamps** — for **$1.73**.
 
 | Stage | Status | Validated against |
 |---|---|---|
@@ -21,7 +21,7 @@ chapter timestamps** — for **$1.73**.
 | 7 voice | done | **live**, 27 clips, ElevenLabs Bella, 291s measured, $0.469 |
 | 8 render | done | **live**, 5 parts stitched, crossfades, <30ms A/V drift |
 | 9 package | done | **live**, episode + segments + thumbnail + chapters |
-| 10 upload | **not built** | spec'd 2026-08-09; blocked on a YouTube API compliance audit |
+| 10 upload | dry-run | request body validated against the real bundle; **live path blocked on a YouTube API compliance audit** |
 
 A full run is 1,225 papers → 15 shortlisted → 15 enriched → 3 finalists →
 3 digests → a scripted, narrated, rendered episode. About 10 minutes end to end,
@@ -45,10 +45,28 @@ pipeline run --paper 2608.04424    # restrict per-paper stages to one paper
 pipeline shortlist --run 2026-08-07  # view the shortlist
 pipeline rank --run 2026-08-07       # view finalists + substitutes
 pipeline cost --run 2026-08-07       # view the cost report
+pipeline youtube-auth                # one-time OAuth; prints a refresh token
 
 # The upload-ready bundle lands in runs/<date>/output/:
 #   episode.mp4  segment_<id>.mp4 x3  thumbnail.png  metadata.json  cost_report.json
+#   upload.json  <- stage 10: what was (or would be) sent to YouTube
 ```
+
+### Publishing (stage 10)
+
+`upload.enabled` is **false** in `config.yaml`, so the stage runs as a dry-run: it
+validates the bundle against YouTube's limits, computes the scheduled publish
+time, and writes the exact `videos.insert` body to `output/upload.json` without
+calling the API. Review that file, then upload `episode.mp4` by hand in YouTube
+Studio using `metadata.json`.
+
+Going live needs three things, in order: a Google Cloud project with the YouTube
+Data API enabled and a Desktop-app OAuth client; `pipeline youtube-auth` once, to
+mint the refresh token; and **the YouTube API compliance audit to pass** — until
+it does, uploads from the project are locked to `private` and `publishAt` is
+ignored. Then `uv pip install -e '.[youtube]'` and flip `upload.enabled: true`.
+
+Every upload sets `containsSyntheticMedia: true`. That is not configurable.
 
 ## How it is organised
 
@@ -72,6 +90,7 @@ pipeline/
   llm/           provider-agnostic client + cost tracking
   tts/           Stage 7: interface + macOS/OpenAI adapters (D19)
   render/        Stage 8: Pillow slide composition + thumbnail (D20)
+  youtube.py     Stage 10: YouTube Data API v3 client, upload scope only (D24)
   stages/        one module per stage
 prompts/         all prompts as versioned files, never inline strings
 ```
@@ -129,7 +148,7 @@ invocations**: resuming with `--from` does not grant a fresh budget.
 ## Tests
 
 ```bash
-pytest        # 139 tests, no network, no API spend, no ffmpeg needed
+pytest        # 176 tests, no network, no API spend, no ffmpeg needed
 ruff check .
 ```
 
@@ -144,6 +163,10 @@ with stubs to keep the fixtures small.
 Stages 2, 4, 5 and 6 are tested with a fake LLM covering the failure modes that
 matter: unparseable responses, hallucinated arXiv IDs, duplicate entries,
 fabricated numbers, invented figure paths, and total provider failure.
+
+Stage 10 is faked at two seams — a fake `YouTubeClient` for the stage's policy
+and a fake `googleapiclient` service for the resumable-upload retry loop — so the
+suite cannot publish a video, and needs none of the `[youtube]` extras installed.
 
 ### Reviewing a script
 
@@ -166,12 +189,12 @@ runs/<date>/script/segment_<arxiv_id>.md   # one segment, scene by scene
 - **The music bed is off by default.** No royalty-free track is shipped; the
   synthesised fallback reads as hum once audible. Drop a file in `assets/music/`
   and set `render.background_music: true` (D21).
-- **Publishing is manual.** Stage 10 (`SPEC.md`) specifies automated upload, but
-  it is not built and is gated on an owner action with a long lead time: the
-  Google Cloud project must pass a **YouTube API compliance audit** (~2-4 weeks)
-  before anything can publish public or scheduled. Until then, uploads from an
-  unverified project are locked to `private`. Upload `episode.mp4` by hand via
-  YouTube Studio using `metadata.json`.
+- **Publishing is still manual, and the blocker is not code.** Stage 10 is built
+  and runs in dry-run, but going live needs a **YouTube API compliance audit**
+  (~2-4 weeks, owner action). Until it passes, uploads from an unverified project
+  are locked to `private` and scheduled publishing is ignored. Upload
+  `episode.mp4` by hand via YouTube Studio using `metadata.json`. The live path
+  has never run against the real API — only against a faked one (D24).
 - **Scheduling is not set up** (spec §5 — GitHub Actions cron Tue/Thu). Note the
   render step needs `ffmpeg`, and narration needs `ELEVENLABS_API_KEY`.
 - **`state.json` is still not advanced**, so consecutive runs re-cover the same

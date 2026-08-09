@@ -7,6 +7,7 @@ spends money, not three stages in.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -121,6 +122,31 @@ class RenderConfig(StrictModel):
 	music_db: float = -18.0
 
 
+class UploadConfig(StrictModel):
+	# Off until the Google Cloud project passes the YouTube API compliance audit
+	# (SPEC.md Stage 10). Disabled means dry-run: validate and log, never call the
+	# API. This default is deliberate - flipping it is an owner decision.
+	enabled: bool = False
+	# `private` + `publish_at` is the scheduled-publish idiom; YouTube only honours
+	# publishAt on a private video.
+	privacy_status: Literal["private", "unlisted", "public"] = "private"
+	publish_time_local: str = "12:00"
+	timezone: str = "America/New_York"
+	# 28 = Science & Technology, 27 = Education.
+	category_id: str = "28"
+	tags: list[str] = Field(default_factory=list)
+	made_for_kids: bool = False
+	language: str = "en"
+	# If the run finishes after the day's publish time, schedule this many minutes
+	# out instead of silently missing the slot. See DECISIONS.md D24.
+	late_publish_grace_minutes: int = 15
+	# Resumable-upload chunk. 8 MB balances retry cost against request overhead.
+	chunk_size_mb: int = 8
+	max_retries: int = 5
+	poll_timeout_seconds: float = 900.0
+	poll_interval_seconds: float = 20.0
+
+
 class Config(StrictModel):
 	fetch: FetchConfig
 	shortlist: ShortlistConfig
@@ -132,6 +158,7 @@ class Config(StrictModel):
 	models: dict[str, ModelSpec]
 	tts: TTSConfig = Field(default_factory=TTSConfig)
 	render: RenderConfig = Field(default_factory=RenderConfig)
+	upload: UploadConfig = Field(default_factory=UploadConfig)
 
 	def model_for(self, stage_key: str) -> ModelSpec:
 		try:

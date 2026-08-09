@@ -357,6 +357,37 @@ class PackageResult(StrictModel):
 	total_cost_usd: float = 0.0
 
 
+# --- Stage 10: upload --------------------------------------------------------
+
+
+class UploadResult(StrictModel):
+	"""What Stage 10 did, written to `output/upload.json`.
+
+	Doubles as the idempotency record: a re-run that finds a `video_id` here with
+	`dry_run` false must not upload again (spec Stage 10).
+	"""
+
+	generated_at: datetime
+	dry_run: bool
+	video_id: str | None = None
+	video_url: str | None = None
+	privacy_status: str = ""
+	# RFC3339, as sent. Null when publishing immediately or when scheduling was
+	# skipped.
+	publish_at: str | None = None
+	# YouTube's AI-disclosure flag. Always true for this channel - non-negotiable
+	# per the spec, and asserted in the tests.
+	contains_synthetic_media: bool = True
+	thumbnail_set: bool = False
+	processing_status: str = ""
+	video_file: str = ""
+	video_bytes: int = 0
+	# Exactly what was (or would be) sent to videos.insert. In dry-run this is the
+	# whole point of the artifact: it is reviewable before anything is published.
+	request_body: dict = Field(default_factory=dict)
+	warnings: list[str] = Field(default_factory=list)
+
+
 # --- Cost accounting ---------------------------------------------------------
 
 

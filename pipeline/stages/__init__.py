@@ -8,6 +8,7 @@ from .rank import RankStage
 from .render import RenderStage
 from .script import ScriptStage
 from .shortlist import ShortlistStage
+from .upload import UploadStage
 from .voice import VoiceStage
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
 	"RenderStage",
 	"ScriptStage",
 	"ShortlistStage",
+	"UploadStage",
 	"VoiceStage",
 ]

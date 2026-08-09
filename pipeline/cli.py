@@ -4,6 +4,7 @@ pipeline run                      # full pipeline, new run for today
 pipeline run --from shortlist     # replay from a stage using cached artifacts
 pipeline run --run 2026-08-07     # target an existing run directory
 pipeline cost --run 2026-08-07    # print the cost report
+pipeline youtube-auth             # one-time OAuth, prints a refresh token
 """
 
 from __future__ import annotations
@@ -32,13 +33,13 @@ from .stages import (
 	RenderStage,
 	ScriptStage,
 	ShortlistStage,
+	UploadStage,
 	VoiceStage,
 )
 
 app = typer.Typer(add_completion=False, help="arXiv paper video pipeline")
 console = Console()
 
-# Stages implemented so far. Later phases append here.
 STAGES = {
 	"fetch": FetchStage,
 	"shortlist": ShortlistStage,
@@ -49,6 +50,7 @@ STAGES = {
 	"voice": VoiceStage,
 	"render": RenderStage,
 	"package": PackageStage,
+	"upload": UploadStage,
 }
 
 
@@ -178,6 +180,82 @@ def cost(
 		console.print(f"[red]No cost report at {paths.cost_report_json}[/red]")
 		raise typer.Exit(1)
 	_print_cost(CostReport.model_validate(read_json(paths.cost_report_json)))
+
+
+@app.command()
+def youtube_auth(
+	client_secrets: Path | None = typer.Option(
+		None, "--client-secrets", help="Google OAuth client JSON. Defaults to env vars."
+	),
+	port: int = typer.Option(0, "--port", help="Local callback port (0 = pick one)"),
+) -> None:
+	"""Run the one-time interactive OAuth flow and print a refresh token.
+
+	Every later run is non-interactive: Stage 10 exchanges the refresh token for
+	an access token itself. Store the printed value as a secret - it is a
+	long-lived credential for the channel.
+	"""
+	_setup_logging(False)
+	load_dotenv()
+
+	from .youtube import ENV_CLIENT_ID, ENV_CLIENT_SECRET, SCOPE
+
+	try:
+		from google_auth_oauthlib.flow import InstalledAppFlow
+	except ImportError:
+		# The escape matters: rich would otherwise read [youtube] as markup and
+		# print an install command that does not install anything.
+		console.print(
+			r"[red]This needs the google client libraries:[/red] uv pip install -e '.\[youtube]'"
+		)
+		raise typer.Exit(2) from None
+
+	if client_secrets:
+		if not client_secrets.exists():
+			console.print(f"[red]No client secrets file at {client_secrets}[/red]")
+			raise typer.Exit(2)
+		flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), scopes=[SCOPE])
+	else:
+		import os
+
+		cid, secret = os.environ.get(ENV_CLIENT_ID), os.environ.get(ENV_CLIENT_SECRET)
+		if not cid or not secret:
+			console.print(
+				f"[red]Set {ENV_CLIENT_ID} and {ENV_CLIENT_SECRET} in .env, or pass "
+				f"--client-secrets.[/red]"
+			)
+			raise typer.Exit(2)
+		flow = InstalledAppFlow.from_client_config(
+			{
+				"installed": {
+					"client_id": cid,
+					"client_secret": secret,
+					"auth_uri": "https://accounts.google.com/o/oauth2/auth",
+					"token_uri": "https://oauth2.googleapis.com/token",
+					"redirect_uris": ["http://localhost"],
+				}
+			},
+			scopes=[SCOPE],
+		)
+
+	console.print(f"Requesting the [cyan]{SCOPE}[/cyan] scope. A browser window will open.")
+	# access_type=offline + prompt=consent is what actually returns a refresh
+	# token; without the prompt Google reuses a prior grant and omits it.
+	creds = flow.run_local_server(port=port, access_type="offline", prompt="consent")
+
+	if not creds.refresh_token:
+		console.print(
+			"[yellow]Google returned no refresh token. Revoke this app's access at "
+			"https://myaccount.google.com/permissions and try again.[/yellow]"
+		)
+		raise typer.Exit(1)
+
+	console.print("\n[green]Add this to .env (and to your CI secrets):[/green]")
+	console.print(f"YOUTUBE_REFRESH_TOKEN={creds.refresh_token}")
+	console.print(
+		"\n[dim]Uploads stay locked to private until the Google Cloud project passes the "
+		"YouTube API compliance audit.[/dim]"
+	)
 
 
 @app.command()
