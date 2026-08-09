@@ -4,8 +4,9 @@ Automated pipeline that turns the week's notable arXiv AI/ML papers into a 3-5
 minute video. `SPEC.md` is the full design; `DECISIONS.md` records every choice
 made along the way.
 
-**Status: all nine stages built and validated end-to-end.** A single command
-turns a live arXiv window into an upload-ready episode: **`episode.mp4` (4.9 min,
+**Status: stages 1-9 built and validated end-to-end; Stage 10 (upload) is
+specified but not built.** A single command turns a live arXiv window into an
+upload-ready episode: **`episode.mp4` (4.9 min,
 1920x1080 H.264), three standalone segments, a thumbnail, and metadata with
 chapter timestamps** — for **$1.73**.
 
@@ -20,6 +21,7 @@ chapter timestamps** — for **$1.73**.
 | 7 voice | done | **live**, 27 clips, ElevenLabs Bella, 291s measured, $0.469 |
 | 8 render | done | **live**, 5 parts stitched, crossfades, <30ms A/V drift |
 | 9 package | done | **live**, episode + segments + thumbnail + chapters |
+| 10 upload | **not built** | spec'd 2026-08-09; blocked on a YouTube API compliance audit |
 
 A full run is 1,225 papers → 15 shortlisted → 15 enriched → 3 finalists →
 3 digests → a scripted, narrated, rendered episode. About 10 minutes end to end,
@@ -164,8 +166,12 @@ runs/<date>/script/segment_<arxiv_id>.md   # one segment, scene by scene
 - **The music bed is off by default.** No royalty-free track is shipped; the
   synthesised fallback reads as hum once audible. Drop a file in `assets/music/`
   and set `render.background_music: true` (D21).
-- **Publishing is manual**, as the spec intends for v1 — the pipeline produces
-  upload-ready assets in `runs/<date>/output/` and stops there.
+- **Publishing is manual.** Stage 10 (`SPEC.md`) specifies automated upload, but
+  it is not built and is gated on an owner action with a long lead time: the
+  Google Cloud project must pass a **YouTube API compliance audit** (~2-4 weeks)
+  before anything can publish public or scheduled. Until then, uploads from an
+  unverified project are locked to `private`. Upload `episode.mp4` by hand via
+  YouTube Studio using `metadata.json`.
 - **Scheduling is not set up** (spec §5 — GitHub Actions cron Tue/Thu). Note the
   render step needs `ffmpeg`, and narration needs `ELEVENLABS_API_KEY`.
 - **`state.json` is still not advanced**, so consecutive runs re-cover the same

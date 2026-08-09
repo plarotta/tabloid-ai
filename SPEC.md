@@ -1,7 +1,9 @@
 # arXiv Paper Video Pipeline — Design & Implementation Spec
 
-> Verbatim copy of the owner-supplied spec (2026-08-07). Source of truth for design.
+> Owner-supplied spec. Source of truth for design.
 > Recovered into the repo on 2026-08-07; it previously existed only in a chat transcript.
+> **Amended 2026-08-09** by the owner to add Stage 10 (Upload). Everything else is
+> as originally supplied; the §1 non-goal on publishing was updated to match.
 
 Status: Greenfield. This document is the source of truth for design and implementation. Owner: Pedro Intended reader: Claude Code (agentic implementation). Read this fully before writing code. Where the spec says DECIDE, make a reasoned choice, document it in `DECISIONS.md`, and proceed. Where it says ASK, stop and ask the owner.
 1. Goal
@@ -13,7 +15,9 @@ Primary success criteria, in order:
 3. Factual fidelity — narration claims must be traceable to the paper. No hallucinated results.
 4. Watchable quality: real figures from the paper, clean narration, readable slides.
 
-Explicit non-goals (v1): generative video (Veo/Sora-class), talking-head avatars, multi-language, live publishing to YouTube (produce upload-ready assets; publishing stays manual for now).
+Explicit non-goals (v1): generative video (Veo/Sora-class), talking-head avatars, multi-language.
+
+Publishing was originally a non-goal ("produce upload-ready assets; publishing stays manual for now"). **Superseded 2026-08-09 by Stage 10** — automated upload is now in scope, gated behind a YouTube API compliance audit. Manual upload via YouTube Studio remains the documented fallback while that audit is outstanding.
 2. Architecture overview
 
 ```
@@ -26,6 +30,7 @@ Explicit non-goals (v1): generative video (Veo/Sora-class), talking-head avatars
 [7] Voice      TTS per scene
 [8] Render     programmatic video assembly per segment, then stitch episode
 [9] Package    mp4 + segments + thumbnail + title/description + cost report
+[10] Upload    YouTube Data API v3, scheduled publish + AI disclosure (audit-gated)
 
 ```
 
@@ -123,6 +128,16 @@ Stage 8 — Render
 
 Stage 9 — Package
 `runs/<date>/output/`: `episode.mp4`, `segment_<id>.mp4` ×3, `thumbnail.png` (generate programmatically from template + best figure; no image-gen API needed in v1), `metadata.json` (title, description, chapter timestamps), `cost_report.json`.
+Stage 10 — Upload (YouTube)
+
+* Use YouTube Data API v3 `videos.insert` with the **`youtube.upload` scope only** — the narrowest scope that does the job, which also makes the compliance audit easier. Google API Python client, resumable upload, exponential backoff on 5xx.
+* **Policy constraint that gates this stage:** videos uploaded from unverified API projects (created after 2020-07-28) are **locked to `private`**. The Google Cloud project must pass a YouTube API compliance audit before public or scheduled publishing works. **This is owner action, not code:** create the project and OAuth consent screen, and submit the audit **during Phase 1** — lead time is ~2–4 weeks and it runs parallel to development.
+* Upload flow: upload as `privacyStatus: private` with `publishAt` set to the configured publish time (e.g. 12:00 ET same day) → set the thumbnail via `thumbnails.set` → verify processing by polling `videos.list` until processed.
+* Set `status.containsSyntheticMedia: true`. This is YouTube's AI-content disclosure and is **non-negotiable for this channel**.
+* OAuth: a one-time interactive flow obtains a refresh token; store that refresh token as a secret (env var / GitHub Actions secret). The code must handle token refresh **non-interactively** thereafter.
+* Dry-run mode (`upload.enabled: false` in config — the default until the audit clears): the stage validates metadata and logs what it *would* upload. The fallback path is manual upload of `episode.mp4` via YouTube Studio using `metadata.json`.
+* Idempotency: record the returned video ID in `runs/<date>/output/upload.json`. A re-run must not double-upload.
+
 4. Cost accounting (hard requirement)
 
 * Wrap every LLM/TTS call in a client that logs: stage, model, input/output tokens, computed cost from a `pricing.yaml` checked into the repo.
@@ -145,6 +160,7 @@ Build in this order; each phase ends with something runnable.
 * Phase 3 — Extract + Script: PaperDigest and SceneManifest generation with schema validation. Output: reviewable scripts as markdown alongside the JSON.
 * Phase 4 — Voice + Render one segment: TTS + renderer for a single paper segment. This is the go/no-go quality checkpoint — ASK for owner review of the first rendered segment before proceeding.
 * Phase 5 — Full episode assembly + packaging + scheduling.
+* Phase 6 — Upload: Stage 10 behind `upload.enabled`, dry-run first, live once the compliance audit clears. **The audit is the long pole and does not depend on any code** — submit it at Phase 1 so it is not the thing holding up the first publish.
 
 7. Repo conventions
 

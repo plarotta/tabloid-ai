@@ -708,7 +708,9 @@ All nine stages are built, so nothing below blocks producing an episode by hand.
 
 | ID | Decision | Spec | Status |
 |---|---|---|---|
-| — | **Scheduling**: GitHub Actions vs split local render | §5 | **The only unbuilt spec item.** A runner needs `ffmpeg` and `ELEVENLABS_API_KEY`; the spec flags render as possibly too heavy for Actions and suggests splitting. |
+| — | **YouTube compliance audit** | §3 Stage 10 | **Owner action, on the critical path.** ~2-4 week lead time and no code dependency, so it gates the first public publish regardless of when Stage 10 is written. The spec says submit it during Phase 1; Phases 1-5 are done and it has not been started. |
+| — | **Stage 10 — Upload** | §3 Stage 10 | Added to the spec 2026-08-09, not built. Ships behind `upload.enabled: false` (dry-run) so it can land before the audit clears. |
+| — | **Scheduling**: GitHub Actions vs split local render | §5 | A runner needs `ffmpeg` and `ELEVENLABS_API_KEY`; the spec flags render as possibly too heavy for Actions and suggests splitting. |
 | — | **Advancing `state.json`** | §3 Stage 1 | Still pinned, so consecutive runs re-cover the same window. Should move only once an episode is actually published. |
 | — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21). |
 | — | **Branding / series name** | §8 Q3 | Never asked. Title cards currently carry the paper's own hook and no series identity, which works but is anonymous. |
