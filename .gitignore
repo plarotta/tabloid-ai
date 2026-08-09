@@ -1,0 +1,16 @@
+.env
+runs/
+state.json
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+node_modules/
+
+demos/out/

@@ -1,0 +1,126 @@
+# Single source of truth for pipeline behaviour.
+# API keys are NEVER stored here - they come from env vars (see .env.example).
+
+fetch:
+  categories: [cs.LG, cs.CL, cs.CV, cs.AI, stat.ML]
+  # Fallback window when no previous successful run is recorded.
+  fallback_window_days: 4
+  # arXiv asks for >=3s between requests. Page size capped by their API.
+  page_size: 200
+  request_delay_seconds: 3.0
+  max_retries: 5
+  # Hard stop so a bad date window cannot spend unbounded time/money.
+  max_papers: 3000
+
+shortlist:
+  stage_model: shortlist
+  # Abstracts per LLM call. Higher = cheaper, but degrades scoring quality
+  # and risks truncated JSON. 20 measured as a reasonable middle.
+  batch_size: 20
+  shortlist_size: 15
+  max_concurrency: 4
+  # Papers scoring below this are dropped before ranking regardless of rank.
+  min_score: 5.0
+
+enrich:
+  # One e-print download per shortlisted paper. arXiv is free; stay polite.
+  request_delay_seconds: 3.0
+  max_concurrency: 4
+  max_figures: 12
+  # Fewer enriched papers than this and ranking has too thin a field.
+  min_enriched: 5
+  # Keep unpacked LaTeX under enrich/<id>/_work/ for debugging (100MB+ per run).
+  keep_source: false
+
+rank:
+  stage_model: rank
+  finalists: 3
+  # Papers ranked below this are still kept as substitution candidates
+  # when a winner fails enrichment/extraction (spec section 5, failure policy).
+  substitution_depth: 6
+  # Exclude papers with no usable figure - the format depends on showing them.
+  require_figures: true
+
+extract:
+  stage_model: extract
+  # Cap the paper text sent to the model; appendices rarely carry the results.
+  max_fulltext_chars: 90000
+  # Swap in the next-ranked substitute when a finalist fails (spec section 5).
+  substitute_on_failure: true
+  min_digests: 2
+  # Drop headline results whose numbers appear nowhere in the paper.
+  verify_numbers: true
+
+script:
+  stage_model: script
+  max_concurrency: 3
+  # Spec Stage 6: 60-90s per paper segment at ~150 words per minute.
+  target_segment_seconds: 75
+  cold_open_seconds: 12
+  words_per_minute: 150
+
+budget:
+  # Fail the run if projected spend exceeds this.
+  # Per-RUN, cumulative across every invocation against the same run id - so a
+  # run that has been re-driven during development carries that history. Raised
+  # 2.0 -> 3.0 once hosted TTS was added: narration is ~$0.47 and the 2026-08-07
+  # run had already spent $1.49 on repeated extract/script passes, leaving too
+  # little headroom to survive a price estimate being slightly wrong.
+  ceiling_usd: 3.0
+  # Per-stage soft targets; exceeding one emits a warning, not a failure.
+  stage_targets_usd:
+    shortlist: 1.0
+    rank: 2.0
+    extract: 6.0
+    script: 3.0
+    voice: 1.0
+
+# Model choice per stage. Provider must have a matching entry in pricing.yaml
+# and its API key present in the environment.
+models:
+  shortlist:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    max_tokens: 4096
+    temperature: 0.0
+  rank:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    max_tokens: 8192
+    temperature: 0.2
+  extract:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    max_tokens: 8192
+    temperature: 0.0
+  script:
+    provider: anthropic
+    model: claude-sonnet-4-5-20250929
+    max_tokens: 8192
+    temperature: 0.6
+
+# Stage 7. See DECISIONS.md D19 for why this is macOS `say` rather than the
+# spec's OpenAI default: no OPENAI_API_KEY is configured. Swap `provider` to
+# openai (and add a key) for a hosted neural voice - the interface is unchanged.
+tts:
+  provider: elevenlabs
+  model: eleven_turbo_v2_5
+  # ElevenLabs "Bella". Chosen from the samples in
+  # runs/_voice_samples/elevenlabs/ after both macOS engines were rejected as
+  # robotic (DECISIONS.md D22).
+  voice: EXAVITQu4vr4xnSDxMaL
+  words_per_minute: 150
+
+# Stage 8. Engine decision deferred to Phase 4 (see DECISIONS.md D6).
+render:
+  width: 1920
+  height: 1080
+  fps: 30
+  codec: h264
+  # Cross-dissolve between scenes; runtime is preserved (see DECISIONS.md D21).
+  crossfade_seconds: 0.4
+  # Off by default: no licensed track is shipped, and the synthesised fallback
+  # reads as hum once audible. Drop a royalty-free file in assets/music/ and set
+  # this to true. See DECISIONS.md D21.
+  background_music: false
+  music_db: -18.0

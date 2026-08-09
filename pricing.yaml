@@ -1,0 +1,40 @@
+# Cost table used by pipeline.llm.cost to price every API call.
+#
+# IMPORTANT: these are list prices in USD and they drift. The pipeline does not
+# fetch live pricing - it trusts this file. Re-verify before relying on a
+# cost_report for anything that matters, and bump `verified_on` when you do.
+#
+# text units: USD per 1,000,000 tokens
+# audio units: USD per 1,000,000 characters of input text
+verified_on: 2026-08-07
+verified_by: claude-api-skill-model-catalog
+# Verified: haiku-4-5 $1/$5, sonnet tier $3/$15, opus tier $5/$25 per 1M tokens.
+# The two models this pipeline actually uses (shortlist=haiku-4-5, rank=sonnet-4-5)
+# are confirmed correct, so the cost tracker does not understate spend.
+
+text:
+  anthropic:
+    claude-opus-4-5-20251101: {input: 5.00, output: 25.00}
+    claude-sonnet-4-5-20250929: {input: 3.00, output: 15.00}
+    claude-haiku-4-5-20251001: {input: 1.00, output: 5.00}
+    claude-3-5-haiku-20241022: {input: 0.80, output: 4.00}
+  openai:
+    gpt-4o: {input: 2.50, output: 10.00}
+    gpt-4o-mini: {input: 0.15, output: 0.60}
+  groq:
+    llama-3.1-8b-instant: {input: 0.05, output: 0.08}
+    qwen3-32b: {input: 0.29, output: 0.59}
+
+audio:
+  # Local engine: genuinely free, not unknown. Listing it at 0.0 keeps it out of
+  # the `unpriced` count, which is reserved for prices we do not know.
+  macos:
+    say: {input: 0.0}
+  # NOTE: unlike the text table above, these audio prices have NOT been verified
+  # against a live pricing page. Verify before relying on a TTS cost figure.
+  openai:
+    tts-1: {input: 15.00}
+    tts-1-hd: {input: 30.00}
+    gpt-4o-mini-tts: {input: 12.00}
+  elevenlabs:
+    eleven_turbo_v2_5: {input: 100.00}
