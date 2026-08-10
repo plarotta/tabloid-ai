@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -98,6 +99,82 @@ def test_fetch_window_falls_back_when_no_state(ctx, monkeypatch):
 	monkeypatch.setattr("pipeline.stages.fetch.last_successful_run", lambda: None)
 	start, end = FetchStage(ctx).window()
 	assert (end - start).days == ctx.config.fetch.fallback_window_days
+
+
+# --- advancing the fetch window ----------------------------------------------
+#
+# `state.json` is what stops consecutive runs re-covering the same papers. It is
+# only safe to move after a run that actually earned it, so the guards matter
+# more than the happy path.
+
+
+@pytest.fixture
+def state_file(tmp_path, monkeypatch):
+	"""Redirect state.json away from the real repo root."""
+	path = tmp_path / "state.json"
+	monkeypatch.setattr("pipeline.state.STATE_PATH", path)
+	return path
+
+
+def _packaged(ctx, window_end: str = "2026-08-07T12:00:00+00:00") -> None:
+	"""Minimal on-disk evidence of a complete fetch -> package run."""
+	write_json(
+		ctx.paths.fetch_window_json,
+		{"start": "2026-08-03T12:00:00+00:00", "end": window_end},
+	)
+	write_json(ctx.paths.output_dir / "metadata.json", {"generated_at": "2026-08-07T12:00:00Z"})
+
+
+def test_window_advances_to_the_fetch_end_not_to_now(ctx, state_file):
+	"""Moving the marker to "now" would silently drop every paper submitted while
+	the run was working."""
+	from pipeline.cli import _advance_window
+	from pipeline.state import last_successful_run
+
+	_packaged(ctx)
+	advanced = _advance_window(ctx, "fetch", None)
+	assert advanced == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+	assert last_successful_run(state_file) == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+
+
+def test_partial_replay_does_not_advance_the_window(ctx, state_file):
+	"""`--from script` reuses a cached fetch; it has covered no new window."""
+	from pipeline.cli import _advance_window
+
+	_packaged(ctx)
+	assert _advance_window(ctx, "script", None) is None
+	assert not state_file.exists()
+
+
+def test_single_paper_run_does_not_advance_the_window(ctx, state_file):
+	from pipeline.cli import _advance_window
+
+	_packaged(ctx)
+	assert _advance_window(ctx, "fetch", "2608.05715") is None
+	assert not state_file.exists()
+
+
+def test_run_that_never_packaged_does_not_advance_the_window(ctx, state_file):
+	"""A run that died before packaging produced no episode, so the window it
+	fetched was not actually covered."""
+	from pipeline.cli import _advance_window
+
+	write_json(ctx.paths.fetch_window_json, {"end": "2026-08-07T12:00:00+00:00"})
+	assert _advance_window(ctx, "fetch", None) is None
+	assert not state_file.exists()
+
+
+def test_fetch_records_the_window_it_covered(ctx):
+	stage = FetchStage(ctx)
+	assert stage.window_end() is None
+	write_json(ctx.paths.fetch_window_json, {"end": "2026-08-07T12:00:00+00:00"})
+	assert stage.window_end() == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+
+
+def test_corrupt_window_file_is_not_fatal(ctx):
+	"""Better to fall back to the 4-day window than to crash a finished run."""
+	write_json(ctx.paths.fetch_window_json, {"end": "not-a-timestamp"})
+	assert FetchStage(ctx).window_end() is None
 
 
 def test_run_paths_are_stage_scoped(tmp_path):

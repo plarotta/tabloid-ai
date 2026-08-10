@@ -27,6 +27,9 @@ A full run is 1,225 papers → 15 shortlisted → 15 enriched → 3 finalists �
 3 digests → a scripted, narrated, rendered episode. About 10 minutes end to end,
 most of it arXiv rate limiting and ffmpeg.
 
+Scheduling is built (Tue/Thu on GitHub Actions) but **switched off** — see
+[Scheduling](#scheduling) for the one command that starts it.
+
 ## Setup
 
 ```bash
@@ -67,6 +70,50 @@ it does, uploads from the project are locked to `private` and `publishAt` is
 ignored. Then `uv pip install -e '.[youtube]'` and flip `upload.enabled: true`.
 
 Every upload sets `containsSyntheticMedia: true`. That is not configurable.
+
+## Scheduling
+
+Two workflows, split by whether they can spend money:
+
+| Workflow | Trigger | Secrets | What it does |
+|---|---|---|---|
+| `ci.yml` | every push + PR | **none** | ruff, 186 tests, and the Linux render check |
+| `episode.yml` | Tue/Thu 13:00 UTC, or manual | API keys | one full episode, uploaded as an artifact |
+
+**The schedule is off.** Each run spends ~$1.73, so it does nothing until you opt
+in:
+
+```bash
+gh secret set ANTHROPIC_API_KEY
+gh secret set ELEVENLABS_API_KEY
+gh variable set EPISODE_ENABLED --body true   # <- starts the Tue/Thu cron
+```
+
+Manual runs work as soon as the secrets exist, without the variable:
+`gh workflow run episode.yml -f from_stage=fetch`.
+
+The episode lands as a workflow artifact (`episode-<n>`, kept 90 days) — that is
+the handoff, since Stage 10 is still in dry-run. A failed run uploads JSON
+diagnostics instead. Both workflows install `ffmpeg` and `fonts-dejavu-core`
+explicitly; the renderer silently falls back to an unreadable bitmap font without
+a real one, which is what `tests/test_portability.py` exists to catch (D25).
+
+Two things worth knowing: GitHub disables scheduled workflows in public repos
+after 60 days of no repo activity, and 13:00 UTC is 09:00 ET — about three hours
+of slack before Stage 10's noon publish slot, which absorbs Actions' cron drift.
+
+### The fetch window
+
+`state.json` records where the last successful run stopped, so the next one does
+not re-cover the same papers — without it, a Tue/Thu cadence against the 4-day
+fallback window would let one paper headline two consecutive episodes.
+
+It advances only after a run that earned it: a full `fetch`→`package` pass, never
+a `--from <stage>` replay or a `--paper` rebuild. It moves to the **end of the
+fetch window**, not to when the run finished, because the ~10 minutes in between
+would otherwise become a permanent hole in coverage. In Actions it persists
+through the cache; a cache miss falls back to the 4-day window, which overlaps
+rather than breaks (D25).
 
 ## How it is organised
 
@@ -148,7 +195,7 @@ invocations**: resuming with `--from` does not grant a fresh budget.
 ## Tests
 
 ```bash
-pytest        # 176 tests, no network, no API spend, no ffmpeg needed
+pytest        # 186 tests, no network, no API spend; ffmpeg optional
 ruff check .
 ```
 
@@ -167,6 +214,11 @@ fabricated numbers, invented figure paths, and total provider failure.
 Stage 10 is faked at two seams — a fake `YouTubeClient` for the stage's policy
 and a fake `googleapiclient` service for the resumable-upload retry loop — so the
 suite cannot publish a video, and needs none of the `[youtube]` extras installed.
+
+`tests/test_portability.py` is the exception to "no ffmpeg needed": it runs the
+real renderer against the real ffmpeg and skips when there is none. That is the
+check that the Linux runner can produce a readable episode rather than one set in
+Pillow's fallback bitmap font (D25).
 
 ### Reviewing a script
 
@@ -195,9 +247,10 @@ runs/<date>/script/segment_<arxiv_id>.md   # one segment, scene by scene
   are locked to `private` and scheduled publishing is ignored. Upload
   `episode.mp4` by hand via YouTube Studio using `metadata.json`. The live path
   has never run against the real API — only against a faked one (D24).
-- **Scheduling is not set up** (spec §5 — GitHub Actions cron Tue/Thu). Note the
-  render step needs `ffmpeg`, and narration needs `ELEVENLABS_API_KEY`.
-- **`state.json` is still not advanced**, so consecutive runs re-cover the same
-  window. It should move only once an episode is actually published.
-- `state.json` is deliberately not advanced yet — it should only move once the
-  pipeline produces a full episode, otherwise the next run would skip papers.
+- **The schedule is built but inert.** `episode.yml` will not run on its cron
+  until `EPISODE_ENABLED` is set and the two API secrets exist — deliberately, so
+  merging it does not start billing (D25).
+- **The Linux render path has never produced a real episode.** CI proves the
+  fonts, ffmpeg and libx264 are there and that a slide encodes; the full
+  1920x1080 five-part stitch has only ever run on macOS. The first scheduled run
+  is the real test.

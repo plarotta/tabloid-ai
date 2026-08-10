@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from ..arxiv import ArxivClient
-from ..paths import read_jsonl, write_jsonl
+from ..paths import read_json, read_jsonl, write_json, write_jsonl
 from ..schemas import Paper
 from ..stage import Stage, StageError
 from ..state import last_successful_run
@@ -64,5 +64,21 @@ class FetchStage(Stage):
 			self.paths.papers_jsonl,
 			[p.model_dump(mode="json") for p in papers],
 		)
+		# Recorded for the end-of-run state advance, which must move the marker to
+		# `end` rather than to "now": papers submitted while the run was working
+		# fall between the two, and anything skipped here is never covered again.
+		write_json(
+			self.paths.fetch_window_json,
+			{"start": start.isoformat(), "end": end.isoformat(), "papers": len(papers)},
+		)
 		log.info("Wrote %s papers to %s", len(papers), self.paths.papers_jsonl)
 		return papers
+
+	def window_end(self) -> datetime | None:
+		"""The end of the window this run actually fetched, if it was recorded."""
+		if not self.paths.fetch_window_json.exists():
+			return None
+		try:
+			return datetime.fromisoformat(read_json(self.paths.fetch_window_json)["end"])
+		except (KeyError, ValueError, TypeError):
+			return None

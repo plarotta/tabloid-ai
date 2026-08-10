@@ -754,6 +754,75 @@ prints the refresh token every later run consumes non-interactively.
 
 ---
 
+## D25 - Scheduling: everything in GitHub Actions, and the window marker starts moving
+
+The spec left this a DECIDE with a fallback: run it all in Actions, or split
+stages 1–7 into Actions and render locally via `make render`, and **ASK before
+committing to a paid runner**.
+
+**The ASK is not triggered — the repo is public, so Actions minutes are free and
+unlimited.** That removes the only real argument for the split. The other one
+was that render might be too heavy: a full run is ~10 minutes wall clock, most of
+it arXiv rate limiting, against a 6-hour job limit. And the split has a cost the
+spec does not mention — it needs a human at a particular laptop twice a week,
+which is the opposite of the zero-touch goal in §1. So: **one workflow, all ten
+stages, on `ubuntu-latest`.**
+
+**Linux portability was the actual risk, and it was not hypothetical.** The
+renderer picks a font from a candidate list and falls back to Pillow's built-in
+bitmap face when it finds nothing — without raising. On a runner with no DejaVu
+that produces a complete, uploadable episode set in tiny unreadable type. The
+existing suite could not catch it: it fakes ffmpeg and never asserts which font
+it got. `tests/test_portability.py` now checks that the resolved font is a real
+scalable face, that a title card draws actual text, that ffmpeg encodes a slide
+into a measurable clip, and that libx264 is compiled in. Both workflows install
+`ffmpeg` and `fonts-dejavu-core` explicitly rather than trusting what the runner
+image ships this month, and CI asserts both are present so those tests cannot
+quietly skip.
+
+**Two workflows, split by whether they can spend money.** `ci.yml` runs on every
+push with **no secrets at all**, so it cannot bill anything by accident.
+`episode.yml` holds the keys.
+
+**The schedule is opt-in.** Each run spends ~$1.73, and a cron that starts
+billing the moment it merges is not something to switch on for someone. The
+scheduled job is gated behind a repo variable — `gh variable set EPISODE_ENABLED
+--body true` — while `workflow_dispatch` always works. Same shape as
+`upload.enabled` in D24: ship it off, let the owner turn it on. 13:00 UTC (09:00
+ET) leaves ~3 hours before Stage 10's noon publish slot, which Actions' cron
+drift comfortably fits inside.
+
+**Artifact upload is not a nicety.** Stage 10 is still in dry-run, so a run that
+does not hand the bundle to a human produces nothing anyone can publish. The
+episode bundle is uploaded on success (90 days); on failure a much smaller set of
+JSON diagnostics goes up instead of gigabytes of extracted figures.
+
+### The window marker now advances — reversing the earlier position
+
+`state.json` was previously pinned with the note "should move only once an
+episode is actually published." That was right when publishing looked imminent.
+It is wrong now: publishing is blocked on a compliance audit with no date, and a
+Tue/Thu schedule against a fixed 4-day fallback window means **Thursday's run
+re-covers Monday and Tuesday** — the same paper can headline two consecutive
+episodes. Waiting for the audit guarantees that bug on every scheduled run, so
+the marker now advances on a **packaged** episode rather than a published one.
+
+Two details that matter more than they look:
+
+- **It moves to the fetch window's `end`, not to "now".** A run takes ~10
+  minutes; papers submitted during it fall between the two, and anything skipped
+  is never covered again. Stage 1 records the window it actually fetched to
+  `fetch/window.json` for exactly this.
+- **Only a run that earned it moves the marker.** `--from script` reuses a cached
+  fetch and has covered no new window; `--paper` is a single-paper rebuild. Both
+  leave it alone, as does any run that never reached a packaged episode.
+
+Persistence in CI is `actions/cache` with a rolling key, saved only on success. A
+cache miss degrades to the 4-day fallback — some overlap, not breakage — which is
+why this is a cache rather than a commit back to the repo.
+
+---
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
@@ -763,8 +832,7 @@ blocks publishing one automatically.
 |---|---|---|---|
 | — | **YouTube compliance audit** | §3 Stage 10 | **Owner action, and now the only thing on the critical path.** ~2-4 week lead time and no code dependency. The spec says submit it during Phase 1; Phases 1-6 are done and it has not been started. Stage 10 stays in dry-run until it clears. |
 | — | **Channel + OAuth client** | §3 Stage 10 | Prerequisite for the audit and for `pipeline youtube-auth`: a Google Cloud project with the YouTube Data API enabled and a Desktop-app OAuth client. Not created. |
-| — | **Scheduling**: GitHub Actions vs split local render | §5 | A runner needs `ffmpeg` and `ELEVENLABS_API_KEY`; the spec flags render as possibly too heavy for Actions and suggests splitting. |
-| — | **Advancing `state.json`** | §3 Stage 1 | Still pinned, so consecutive runs re-cover the same window. Should move only once an episode is actually published. |
+| — | **Turning the schedule on** | §5 | Decided and built (D25), but deliberately inert: the cron job is gated behind the `EPISODE_ENABLED` repo variable, and the two API secrets are not set. Owner action, one command. |
 | — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21). |
 | — | **Branding / series name** | §8 Q3 | Never asked. Title cards currently carry the paper's own hook and no series identity, which works but is anonymous. |
 

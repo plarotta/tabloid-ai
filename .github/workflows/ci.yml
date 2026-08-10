@@ -1,0 +1,55 @@
+name: CI
+
+# Fast, free, and secretless: no API keys are available to this workflow, so it
+# cannot spend money even by accident. Its job is to prove the pipeline still
+# builds and that it works on Linux, which is where the scheduled episode runs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Stage 8 shells out to ffmpeg, and the slide renderer needs a real
+      # scalable font or it silently falls back to Pillow's bitmap face.
+      # Installed explicitly rather than relying on what the runner image
+      # happens to ship this month.
+      - name: Install ffmpeg and fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install
+        run: uv pip install --system -e '.[anthropic]' pytest pytest-cov ruff respx
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      # tests/test_portability.py skips itself when ffmpeg is absent, which would
+      # turn a broken runner into a silent pass. Assert the dependencies are
+      # really here so those tests cannot skip.
+      - name: Verify the render dependencies are present
+        run: |
+          ffmpeg -version | head -1
+          test -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+
+      - name: Test
+        run: pytest -q

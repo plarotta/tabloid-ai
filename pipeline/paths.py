@@ -49,6 +49,13 @@ class RunPaths:
 	def papers_jsonl(self) -> Path:
 		return self.stage_dir("fetch") / "papers.jsonl"
 
+	# The window Stage 1 actually covered. Recorded so a completed run can advance
+	# `state.json` to the window *end* rather than to whenever the run finished -
+	# the difference is every paper submitted while the run was working.
+	@property
+	def fetch_window_json(self) -> Path:
+		return self.stage_dir("fetch") / "window.json"
+
 	# Stage 2
 	@property
 	def shortlist_json(self) -> Path:

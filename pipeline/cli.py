@@ -164,8 +164,33 @@ def run(
 	_print_cost(report)
 	console.print(f"[green]Artifacts in {ctx.paths.root}[/green]")
 
-	# Note: state.json is only advanced once the pipeline produces a full episode
-	# (Phase 5). Advancing it now would skip papers on the next run.
+	advanced = _advance_window(ctx, from_stage, paper)
+	if advanced is not None:
+		console.print(f"[green]Next run's window starts at {advanced:%Y-%m-%d %H:%M} UTC[/green]")
+
+
+def _advance_window(ctx: StageContext, from_stage: str, paper: str | None):
+	"""Move `state.json` forward, but only after a run that earned it.
+
+	The marker is what stops consecutive runs re-covering the same papers, so it
+	moves only when this invocation actually fetched a window *and* carried it all
+	the way to a packaged episode. A partial replay (`--from script`) or a
+	single-paper run has not covered a new window and must leave it alone.
+
+	It moves to the fetch window's `end`, not to now: the minutes a run spends in
+	the LLM stages would otherwise become a permanent hole in coverage.
+	"""
+	from .state import mark_successful_run
+
+	if from_stage != "fetch" or paper:
+		return None
+	if not PackageStage(ctx).is_complete():
+		return None
+	end = FetchStage(ctx).window_end()
+	if end is None:
+		return None
+	mark_successful_run(end)
+	return end
 
 
 @app.command()

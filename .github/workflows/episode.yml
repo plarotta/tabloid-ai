@@ -1,0 +1,137 @@
+name: Episode
+
+# Produces one episode and uploads it as a workflow artifact.
+#
+# THE SCHEDULE IS OPT-IN. Each run spends real money (~$1.73 of Anthropic +
+# ElevenLabs), so the scheduled path does nothing until the repo variable
+# EPISODE_ENABLED is set to "true":
+#
+#   gh variable set EPISODE_ENABLED --body true
+#
+# Manual runs (workflow_dispatch) always work, gated only by the secrets being
+# present. This mirrors `upload.enabled` in config.yaml: ship it off, let the
+# owner turn it on (DECISIONS.md D24, D25).
+#
+# Note: GitHub disables scheduled workflows in public repos after 60 days with no
+# repository activity. A dormant channel stops publishing silently.
+
+on:
+  schedule:
+    # 13:00 UTC is 09:00 ET in summer, 08:00 in winter - either way at least
+    # three hours before Stage 10's 12:00 ET publish slot, so a late start still
+    # lands. Actions cron drifts under load; Stage 10's
+    # late_publish_grace_minutes covers an overrun past the slot.
+    - cron: "0 13 * * 2,4"
+  workflow_dispatch:
+    inputs:
+      from_stage:
+        description: "Stage to start from (fetch, shortlist, ..., upload)"
+        default: fetch
+      run_id:
+        description: "Run ID to target (default: today, YYYY-MM-DD)"
+        default: ""
+
+# One episode at a time. A second run would fight the first over the same run
+# directory and the same window marker.
+concurrency:
+  group: episode
+  cancel-in-progress: false
+
+# The run reads the repo and writes artifacts; it never needs to push.
+permissions:
+  contents: read
+
+jobs:
+  episode:
+    if: github.event_name == 'workflow_dispatch' || vars.EPISODE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # A normal run is ~10 minutes. This is a brake on a hung stage, not a target.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg and fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install
+        run: uv pip install --system -e '.[anthropic]'
+
+      # state.json carries the fetch window forward so consecutive runs do not
+      # re-cover the same papers. Restore-only here; it is saved at the end, and
+      # only when the run succeeded (see the save step).
+      - name: Restore the fetch window marker
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: fetch-window-${{ github.run_id }}
+          restore-keys: |
+            fetch-window-
+
+      - name: Show the window this run will cover
+        run: |
+          if [ -f state.json ]; then cat state.json; else
+            echo "No marker restored - falling back to the 4-day window in config.yaml."
+          fi
+
+      - name: Run the pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          # Only consumed when upload.enabled is true in config.yaml. Absent
+          # secrets are empty strings, which Stage 10 reports by name.
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          # Via env, never interpolated into the script: `${{ }}` inside a run
+          # block pastes the input straight into the shell.
+          FROM_STAGE: ${{ inputs.from_stage || 'fetch' }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          if [ -n "$RUN_ID" ]; then
+            pipeline run --from "$FROM_STAGE" --run "$RUN_ID"
+          else
+            pipeline run --from "$FROM_STAGE"
+          fi
+
+      # The episode itself. Without this the run produces nothing anyone can use:
+      # Stage 10 is still in dry-run, so publishing is a human downloading this.
+      - name: Upload the episode bundle
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: episode-${{ github.run_number }}
+          path: runs/*/output/
+          retention-days: 90
+          if-no-files-found: error
+
+      # Enough to diagnose a failure without shipping gigabytes of figures.
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ github.run_number }}
+          path: |
+            runs/*/cost_report.json
+            runs/*/calls.jsonl
+            runs/*/*/*.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Only a fully successful run advances the marker (the CLI enforces this
+      # too), so saving on success is the whole contract. Saving after a failure
+      # would skip the window that run never covered.
+      - name: Save the fetch window marker
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: fetch-window-${{ github.run_id }}
