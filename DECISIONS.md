@@ -823,6 +823,61 @@ why this is a cache rather than a commit back to the repo.
 
 ---
 
+## Craft backlog — owner review of the first episode, 2026-08-10
+
+Six notes from watching the 2026-08-07 episode back. None are bugs; the pipeline
+does what it was asked to. They are all the difference between "a pipeline that
+produces a video" and "a video worth watching", which is criterion 4 in §1 and the
+one least served so far. Where a note could be checked against the real script
+output, it was — the findings are below the note.
+
+**1. Thumbnails are not good enough.** The Claude-designs / Pillow-draws route
+(explored 2026-08-10) produced better hooks — `"Sticky note attacks"` became
+`"Robots obey sticky notes"` — and fixed two real placement bugs, but the owner's
+verdict on the result is that it still is not good. The code sits uncommitted in
+`pipeline/render/thumbs.py` with `prompts/thumbnail/v1.md`, wired into nothing;
+Stage 9 still ships the original. The untried path is an actual image model
+(Gemini 2.5 Flash Image, or `gpt-image-1`) doing image-to-image over the real
+figure, which is blocked only on a key. Worth keeping from the exploration
+regardless of direction: the focal-point crop and the 45%-retention rule that
+falls back to fitting a figure rather than cropping it into fragments.
+
+**2. The intro and outro are thin.** Verified: the cold open is three flat
+sentences, one per paper, and the outro is two scenes ending on "Thanks for
+watching." There is no series identity, no framing of why these three papers, and
+no reason to subscribe. Lives in `prompts/episode/v1.md`. Note this collides with
+the open question in §8 Q3 — the channel has no name, so there is nothing for an
+intro to introduce.
+
+**3. Nothing bridges the cold open into the first paper.** The cold open's last
+line ends and segment one's title card begins, hard cut. The episode prompt is
+documented as producing "transitions" but nothing consumes them. Needs a decision
+about whether the bridge is narration, a visual device, or both — Stage 6 and
+Stage 8 respectively.
+
+**4. Segments end on a caveat, not a conclusion.** This one has a clear root
+cause. `prompts/script/v1.md` says to close "with the caveat **or** 'why it
+matters'", and the model took the caveat every time: all three segments end on a
+`bullet_slide` of limitations, then cut straight to the next paper. So each paper
+finishes on its weakest note. The fix is to stop offering the choice — require the
+caveat *and then* a one-line close.
+
+**5. Narration is monotonous.** One ElevenLabs voice at one pace with no prosody
+variation across ~5 minutes. Two independent levers: Stage 7 (per-scene voice
+settings, or a second voice for the wrapper) and Stage 6 (sentence-length rhythm,
+which is currently uniform because the prompt budgets words per scene).
+
+**6. It looks like one PowerPoint deck.** The sharper version of this: the *slide
+types* are actually well distributed across the episode — 8 title cards, 7
+figures, 7 bullet slides, 5 result callouts — so the monotony is not in the mix.
+It is that all 27 scenes share one palette, one accent, identical chrome, and no
+motion whatsoever. Candidate directions, roughly in order of effort: a per-paper
+accent so each segment reads as its own chapter; slow pans or scale on figure
+slides so the frame is not frozen; a distinct treatment for the wrapper scenes so
+the episode has punctuation. `pipeline/render/slides.py` and Stage 8.
+
+---
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
