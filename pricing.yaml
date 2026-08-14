@@ -37,4 +37,11 @@ audio:
     tts-1-hd: {input: 30.00}
     gpt-4o-mini-tts: {input: 12.00}
   elevenlabs:
+    # Same per-character list price across these models on the Creator tier at
+    # the time of writing. NOT verified against a live pricing page - an unpriced
+    # model would be silently billed at zero, which is worse than a stale number,
+    # so they are listed. Re-check before trusting a TTS cost figure.
     eleven_turbo_v2_5: {input: 100.00}
+    eleven_multilingual_v2: {input: 100.00}
+    eleven_flash_v2_5: {input: 100.00}
+    eleven_v3: {input: 100.00}

@@ -214,7 +214,7 @@ class ExtractResult(StrictModel):
 # --- Stage 6: script (SceneManifest) -----------------------------------------
 
 
-VisualType = Literal["title_card", "figure", "bullet_slide", "result_callout"]
+VisualType = Literal["title_card", "figure", "bullet_slide", "result_callout", "transition"]
 
 
 class Visual(StrictModel):
@@ -246,6 +246,46 @@ class SceneManifest(StrictModel):
 		return sum(s.est_seconds for s in self.scenes)
 
 
+class Transition(StrictModel):
+	"""The bridge from whatever just played into the next paper.
+
+	Deliberately *not* part of the segment it introduces. A segment that opened
+	with "but a piece of paper is not the only way in" could not be published on
+	its own, and spec Stage 6 requires that it can be. So a transition is an
+	episode-level part, like the cold open and the outro: it is stitched into the
+	episode cut and left out of `segment_<id>.mp4`.
+
+	One scene, always. A bridge is a single sentence; giving it a scene list
+	invites the model to write a second segment intro.
+	"""
+
+	# The paper this leads into. Matches a `SceneManifest.arxiv_id` in `segments`.
+	into_arxiv_id: str
+	narration: str
+	# 2-5 words, burned onto the card. The next paper's angle, not its title.
+	label: str = ""
+	est_seconds: float = Field(gt=0)
+
+	def manifest(self, index: int = 0, total: int = 0) -> SceneManifest:
+		"""Adapt to the shape Stages 7 and 8 already consume.
+
+		`index`/`total` become the chapter marker on the card ("02 / 03"); they
+		are positional, so they are supplied by the caller rather than stored.
+		"""
+		marker = f"{index + 1:02d} / {total:02d}" if total else ""
+		return SceneManifest(
+			arxiv_id="episode",
+			scenes=[
+				Scene(
+					id=f"t{index + 1}",
+					narration=self.narration,
+					visual=Visual(type="transition", title=self.label, highlight=marker),
+					est_seconds=self.est_seconds,
+				)
+			],
+		)
+
+
 class EpisodeMetadata(StrictModel):
 	"""Everything the episode needs beyond the per-paper segments."""
 
@@ -253,6 +293,10 @@ class EpisodeMetadata(StrictModel):
 	description: str
 	thumbnail_text_options: list[str] = Field(default_factory=list)
 	cold_open: SceneManifest | None = None
+	# One per segment, in play order, each introducing the paper it names. The
+	# first bridges the cold open into paper one - the seam the owner review
+	# called out. Empty when the wrapper call failed.
+	transitions: list[Transition] = Field(default_factory=list)
 	outro: SceneManifest | None = None
 
 
@@ -264,6 +308,7 @@ class ScriptResult(StrictModel):
 	@property
 	def est_seconds(self) -> float:
 		total = sum(s.est_seconds for s in self.segments)
+		total += sum(t.est_seconds for t in self.episode.transitions)
 		for extra in (self.episode.cold_open, self.episode.outro):
 			if extra is not None:
 				total += extra.est_seconds
@@ -306,11 +351,15 @@ class VoiceResult(StrictModel):
 	voice: str | None = None
 	segments: list[SegmentAudio]
 	cold_open: SegmentAudio | None = None
+	# Keyed to the paper each one introduces via `SegmentAudio.arxiv_id`, so the
+	# render and chapter arithmetic can place them without relying on order.
+	transitions: list[SegmentAudio] = Field(default_factory=list)
 	outro: SegmentAudio | None = None
 
 	@property
 	def duration_seconds(self) -> float:
 		total = sum(s.duration_seconds for s in self.segments)
+		total += sum(t.duration_seconds for t in self.transitions)
 		for extra in (self.cold_open, self.outro):
 			if extra is not None:
 				total += extra.duration_seconds

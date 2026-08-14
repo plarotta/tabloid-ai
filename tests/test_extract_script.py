@@ -23,6 +23,7 @@ from pipeline.schemas import (
 	PaperSections,
 	RankedPaper,
 	RankResult,
+	SceneManifest,
 	SignalsModel,
 )
 from pipeline.stage import StageError
@@ -223,14 +224,26 @@ def script_payload(pid, scenes=None):
 	}
 
 
-def episode_payload():
+def bridge(pid, narration="And that is only one way in."):
 	return {
+		"into_arxiv_id": pid,
+		"narration": narration,
+		"label": "Another way in",
+		"est_seconds": 5,
+	}
+
+
+def episode_payload(transitions=None):
+	payload = {
 		"title": "A short title",
 		"description": "Desc",
 		"thumbnail_text_options": ["A", "B", "C"],
 		"cold_open": {"arxiv_id": "episode", "scenes": [scene("c1")]},
 		"outro": {"arxiv_id": "episode", "scenes": [scene("o1")]},
 	}
+	if transitions is not None:
+		payload["transitions"] = transitions
+	return payload
 
 
 def seed_extract(ctx, digests):
@@ -278,6 +291,137 @@ def test_episode_wrapper_failure_does_not_lose_segments(ctx, monkeypatch):
 	result = ScriptStage(ctx).run()
 	assert len(result.segments) == 1
 	assert result.episode.title == ""  # degraded, not fatal
+
+
+# --- length budget -----------------------------------------------------------
+
+
+def _budget(ctx, n_scenes, words_each=6, target_words=200):
+	m = SceneManifest.model_validate(
+		{
+			"arxiv_id": "2608.00001",
+			"scenes": [
+				{
+					"id": f"s{i + 1}",
+					"narration": " ".join(["word"] * words_each),
+					"visual": {"type": "title_card", "title": f"T{i + 1}"},
+					"est_seconds": 10,
+				}
+				for i in range(n_scenes)
+			],
+		}
+	)
+	return ScriptStage(ctx)._enforce_budget(m, target_words)
+
+
+def test_a_segment_within_the_cap_is_untouched(ctx):
+	assert len(_budget(ctx, 6).scenes) == 6
+
+
+def test_an_overlong_segment_keeps_its_caveat_and_close(ctx):
+	"""Trimming from the end would take the close, which is the one scene the
+	segment must not lose. The middle goes instead."""
+	ctx.config.script.max_scenes_per_segment = 6
+	out = _budget(ctx, 9)
+	ids = [s.id for s in out.scenes]
+	assert len(ids) == 6
+	assert ids[0] == "s1", "the standalone cut still opens on its title card"
+	assert ids[-2:] == ["s8", "s9"], "caveat then close survive"
+
+
+def test_the_cap_never_produces_an_empty_segment(ctx):
+	ctx.config.script.max_scenes_per_segment = 2
+	assert len(_budget(ctx, 8).scenes) >= 2
+
+
+def test_running_over_the_word_budget_is_reported_not_cut(ctx, caplog):
+	"""Words cannot be trimmed safely in code, so an overlong segment has to be
+	loud rather than silently mangled."""
+	import logging
+
+	with caplog.at_level(logging.ERROR):
+		out = _budget(ctx, 5, words_each=100, target_words=200)
+	assert len(out.scenes) == 5, "no scenes removed for word count alone"
+	assert any("words against a" in r.message for r in caplog.records)
+
+
+# --- transitions (the seam between the cold open and paper one) --------------
+
+
+def _clean(ctx, raw, order):
+	return ScriptStage(ctx)._clean_transitions(raw, order)
+
+
+def test_transitions_are_ordered_by_play_order_not_model_order(ctx):
+	"""Stage 8 inserts each bridge before the paper it names, so the list has to
+	match the order the segments actually play."""
+	order = ["2608.00001", "2608.00002", "2608.00003"]
+	out = _clean(ctx, [bridge("2608.00003"), bridge("2608.00001"), bridge("2608.00002")], order)
+	assert [t.into_arxiv_id for t in out] == order
+
+
+def test_transition_into_a_paper_not_in_the_episode_is_dropped(ctx):
+	"""It would name a segment that never plays and render as a bridge to nowhere."""
+	out = _clean(ctx, [bridge("2608.00001"), bridge("2608.09999")], ["2608.00001"])
+	assert [t.into_arxiv_id for t in out] == ["2608.00001"]
+
+
+def test_only_one_transition_per_paper_survives(ctx):
+	out = _clean(
+		ctx, [bridge("2608.00001", "First."), bridge("2608.00001", "Second.")], ["2608.00001"]
+	)
+	assert len(out) == 1 and out[0].narration == "First."
+
+
+def test_a_malformed_transition_does_not_take_the_others_with_it(ctx):
+	out = _clean(
+		ctx, [{"into_arxiv_id": "2608.00001"}, bridge("2608.00002")], ["2608.00001", "2608.00002"]
+	)
+	assert [t.into_arxiv_id for t in out] == ["2608.00002"]
+
+
+def test_missing_transitions_leave_a_hard_cut_rather_than_failing(ctx):
+	assert _clean(ctx, None, ["2608.00001"]) == []
+
+
+def test_a_bad_transition_does_not_cost_the_title_and_description(ctx, monkeypatch):
+	"""Both come back from the same call, so transitions are validated on their
+	own - an unusable bridge must not degrade the whole wrapper."""
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+	payload = episode_payload(transitions=[{"into_arxiv_id": "2608.00001", "est_seconds": 0}])
+	patch_llm(monkeypatch, ScriptedLLM([script_payload("2608.00001"), payload]))
+
+	episode = ScriptStage(ctx).run().episode
+	assert episode.title == "A short title"
+	assert episode.transitions == []
+
+
+def test_transitions_reach_the_reviewable_script(ctx, monkeypatch):
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+	payload = episode_payload(
+		transitions=[bridge("2608.00001", "The paper is not the only way in.")]
+	)
+	segment = script_payload("2608.00001", [scene(narration="The segment proper starts here.")])
+	patch_llm(monkeypatch, ScriptedLLM([segment, payload]))
+
+	result = ScriptStage(ctx).run()
+	assert len(result.episode.transitions) == 1
+	md = (ctx.paths.stage_dir("script") / "episode.md").read_text()
+	assert "The paper is not the only way in." in md
+	# Read in the order it plays: the bridge before the segment it introduces.
+	assert md.index("Transition") < md.index("The segment proper starts here.")
+
+
+def test_transition_manifest_carries_a_chapter_marker(ctx):
+	t = _clean(ctx, [bridge("2608.00001")], ["2608.00001"])[0]
+	scene_ = t.manifest(1, 3).scenes[0]
+	assert scene_.visual.type == "transition"
+	assert scene_.visual.title == "Another way in"
+	assert scene_.visual.highlight == "02 / 03"
 
 
 def test_all_segments_failing_raises(ctx, monkeypatch):

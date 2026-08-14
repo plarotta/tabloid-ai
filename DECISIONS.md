@@ -853,14 +853,15 @@ intro to introduce.
 line ends and segment one's title card begins, hard cut. The episode prompt is
 documented as producing "transitions" but nothing consumes them. Needs a decision
 about whether the bridge is narration, a visual device, or both — Stage 6 and
-Stage 8 respectively.
+Stage 8 respectively. **Done — D26. The answer was both.**
 
 **4. Segments end on a caveat, not a conclusion.** This one has a clear root
 cause. `prompts/script/v1.md` says to close "with the caveat **or** 'why it
 matters'", and the model took the caveat every time: all three segments end on a
 `bullet_slide` of limitations, then cut straight to the next paper. So each paper
 finishes on its weakest note. The fix is to stop offering the choice — require the
-caveat *and then* a one-line close.
+caveat *and then* a one-line close. **Done — `prompts/script/v2.md`, taken
+together with note 3: this is what the bridge leaves *from*.**
 
 **5. Narration is monotonous.** One ElevenLabs voice at one pace with no prosody
 variation across ~5 minutes. Two independent levers: Stage 7 (per-scene voice
@@ -878,6 +879,229 @@ the episode has punctuation. `pipeline/render/slides.py` and Stage 8.
 
 ---
 
+## D26 - Transitions: a bridge is narration *and* a cut, so it is both
+
+Backlog note 3 asked whether the bridge between parts should be narration, a
+visual device, or both. It is both, because there are two distinct hard cuts at
+every seam and fixing either one leaves the other standing:
+
+- a **narrative** cut — a thought finishes and an unrelated one starts, with
+  nothing connecting them;
+- a **visual** cut — one frame is replaced by the next in a thirtieth of a
+  second, three times per episode.
+
+The spec has asked for transitions since Stage 6 was written (§3, "Also generate:
+episode cold-open, transitions, outro"). Nothing produced them, so nothing
+consumed them and the omission was invisible.
+
+### A transition is an episode-level part, not part of the segment
+
+The tempting implementation is to prepend the bridge line to the next segment's
+first scene. That breaks the standalone requirement: spec Stage 6 says each
+segment must be publishable on its own for Shorts repurposing, and a segment that
+opens with "that attack needed a camera pointed at the world" cannot be. The same
+argument rules out appending it to the previous segment.
+
+So a transition is its own part, exactly like the cold open and the outro — its
+own scene, its own audio clip, its own mp4 — stitched into the episode and absent
+from `segment_<id>.mp4`. It also means `--paper` re-runs skip them for free.
+
+One per paper **including the first**, which is the seam the review actually
+complained about. There is deliberately none between the last paper and the
+outro: closing the loop is the outro's whole job, and a bridge into it would say
+the same thing twice.
+
+The bridge into a paper plays *before* it and belongs to that paper's chapter, so
+clicking a chapter lands on the sentence that sets the paper up rather than on
+its title card.
+
+### The seam cross-fade costs a re-encode, and that is the whole tradeoff
+
+Within a segment, slides have cross-dissolved since D21. Between parts, the
+episode was assembled with a stream-copy concat — free, and correctly so, since
+every part comes out of this pipeline with identical codec settings. But a stream
+copy and a filtergraph are mutually exclusive, and dissolving a seam needs a
+filtergraph. `render.episode_crossfade_seconds` is therefore a real cost knob:
+0.6s by default, 0 restores the copy. Seam fades are longer than the 0.4s
+within-segment fade so a part boundary reads as a section break rather than as
+one more scene change.
+
+**The padding direction is the subtle part.** The episode's audio is a plain
+concat of the parts, so nothing may move on the audio timeline; the video has to
+arrive at each seam at exactly the un-faded elapsed time. D21's within-segment
+path pads each clip at the *end*, which is right there because its inputs are
+still images — a frozen frame shifted by 0.4s is the same frozen frame. Reusing
+that here would slide every part 0.6s early against its own narration, because
+these inputs are real video. The fix is to pad each part after the first at the
+**start**, with `fade` seconds of its own frozen first frame: the xfade consumes
+exactly the pad, so part *i*'s real content still begins at `sum(durations[:i])`.
+Verified against ffmpeg with coloured parts — the dissolve is centred on the
+boundary and the next part's content starts on it, to the frame.
+
+That invariant is what lets Stage 9's chapter marks stay exact, and it is why
+`_xfade_filter` is shared by both scales rather than duplicated: the arithmetic
+is identical, only what gets padded differs. It now consumes `[v0]..[vn]` labels
+that callers supply, replacing a string-replacement pass over the filtergraph.
+
+Audio is concatenated, never `acrossfade`d. A 0.6s audio dissolve at a seam would
+eat the last syllable before it.
+
+Failure is contained at every level: a seam cross-fade that ffmpeg rejects falls
+back to the hard-cut concat rather than losing the episode, a part shorter than
+two fades disables the effect, and a transition that fails to script or narrate
+leaves that one seam as the hard cut it is today.
+
+### A bad bridge must not cost the title
+
+Transitions come back from the same call as the title, description and thumbnail
+options. Validating them as part of `EpisodeMetadata` would mean one malformed
+bridge — an `est_seconds` of 0 is enough — degrades the whole wrapper to empty.
+They are parsed individually instead, then filtered to one per paper and sorted
+into play order, since neither is something the prompt can guarantee.
+
+### The card
+
+The visual half is a distinct slide type, and the only one that does not sit on
+`BG` — a chapter marker, the next paper's angle in two to five words, and a rule
+running most of the frame. On the standard background it would read as one more
+title card, which is precisely the "one long PowerPoint deck" of backlog note 6;
+at full accent strength it is a flashbang held for five seconds. It sits at 22%
+of the accent over the background.
+
+The card text is composed in code from the transition's `label` rather than
+described by the model. The model writes the line that is *spoken*; there is
+nothing for it to decide about the frame, and one fewer field is one fewer thing
+to validate.
+
+### Cost and runtime
+
+One transition adds ~5s of narration to Stage 7 and ~13 words to the Stage 6
+wrapper call, so three of them are a rounding error against the ~$1.30 episode.
+The seam cross-fade re-encodes the finished episode once — the only material
+addition, and the reason it is switchable.
+
+---
+
+## D27 - The visual system goes light, and colour becomes per-paper
+
+Owner review of 2026-08-12: "still quite dull, too dark, and too monochromatic".
+Both halves of that are departures from the spec's Stage 8 wording ("dark
+background, single accent colour"), so both are recorded here rather than
+quietly changed.
+
+**Ground: near-black → paper white (`#F7F6F3`).** The dark ground was chosen
+before there was an episode to watch; across five minutes it read as heavy. The
+concrete argument for flipping is the figures: paper figures are drawn for white
+paper, and the light card they sat on existed purely to rescue them from a ground
+they clashed with. On a paper ground the card stops doing rescue work and becomes
+an edge marker — which is why it now carries a hairline rule instead of relying
+on contrast. Four directions were rendered against real slides before choosing.
+
+**One accent → one accent per paper.** This is the part that actually answers
+"monochromatic". Backlog note 6 established that the *slide mix* was already well
+distributed; the monotony was 27 scenes sharing one hue. Papers now take rust,
+teal and indigo by running order, and a bridge wears the accent of the paper it
+introduces, so the next chapter's colour arrives a beat before the chapter does.
+
+The cold open and outro stay a neutral graphite. They are the frame around the
+papers rather than papers themselves, and giving the wrapper a colour of its own
+would imply a fourth chapter.
+
+Two details worth keeping:
+
+- **The letterbox colour was hardcoded** to the old near-black in the ffmpeg
+  scale filter. Any non-16:9 render would have framed every slide in a colour the
+  visual system no longer contains; it now derives from the palette.
+- **The accent index comes from the running order, not the render loop**, so a
+  `--paper` rebuild produces the same colour the episode gave that segment. Keyed
+  off the loop it would have coloured every single-paper rebuild rust.
+
+## D28 - Narration: the settings that were never sent, and where pauses live
+
+"Still sounds quite robotic, maybe even more so." Two causes, both real:
+
+**`voice_settings` were never sent.** The ElevenLabs client posted only `text`
+and `model_id`, so every line ran at the voice's default `stability`, which is
+high — consistent and flat, which is exactly the complaint across a five-minute
+read. They are now configurable and set to `stability: 0.40`.
+
+**`eleven_turbo_v2_5` is the latency-optimised model.** Nothing in a batch
+pipeline needs low latency. Now `eleven_multilingual_v2`.
+
+### Pauses live in the audio file, not the timeline
+
+The owner asked for more pausing. Three mechanisms were possible and the choice
+matters:
+
+- `<break>` tags in the narration. **Measured on this account, not assumed:**
+  they work — 1.25s of speech becomes 7.34s with two three-second breaks — but
+  only above roughly half a second. A 0.6s break changed a real line by 46ms,
+  because the pause a full stop already produces absorbs it. Ellipses and em
+  dashes do nothing at all.
+- A gap inserted in the render timeline. Rejected: Stage 8 derives both of its
+  tracks from what Stage 7 measured, so a gap added there has to be added twice
+  and kept in sync forever.
+- **Silence appended to each clip in Stage 7. Chosen.** The clip is measured
+  after padding, so the gap flows through the timeline, the chapter marks and the
+  runtime with no arithmetic anywhere else. It is deterministic, unlike anything
+  that depends on how a given model interprets a tag. And the beat lands exactly
+  where the slide changes, so it is a visual rest as well as an audible one.
+
+### A duration bug this uncovered, and the chapter drift it explains
+
+`measure_duration` tried `afinfo` before `ffprobe`. `afinfo` reports an
+*estimated* duration and runs about 0.25% long on MP3 — 30ms per clip, invisible.
+Across the 29 clips of the 2026-08-12 episode it summed to **1.09s of timeline
+that did not exist in the files**, which is precisely the drift that pushed the
+late chapter marks past their true positions (flagged as "known drift" after that
+run, and wrongly attributed to AAC quantisation alone). `ffprobe` reads the
+container and is now preferred, with `afinfo` kept as the fallback for a machine
+without ffmpeg.
+
+## D29 - Length: a cap in code, because a budget in a prompt is a suggestion
+
+The 2026-08-12 episode ran 6:22 against a 3-5 minute spec. `script/v2` asked for
+5-8 scenes and a 75-second target; it got 8, 7 and 7 scenes at ~110s each. The
+prompt had stated the budget correctly since v1 and been ignored three times.
+
+So the scene count is now enforced in Stage 6 rather than requested. **How** it
+is enforced is the decision: trimming from the end takes the close, which is the
+one scene a segment must not lose (D26 note 4), and trimming from the front takes
+the title card the standalone cut requires. The cap keeps the head up to the
+limit and **always preserves the last two scenes** — caveat, then close — so an
+over-long segment loses its middle and keeps its shape.
+
+Word count is reported, never cut. There is no safe way to shorten a sentence in
+code, so exceeding the budget by more than 25% logs an error naming the prompt as
+the thing to fix.
+
+The owner chose ~4:30 over a more aggressive 3:30, keeping segments substantive.
+
+## D30 - The series has a name, and the cold open has a job
+
+Resolves §8 Q3, open since the spec was written: the channel had no name, so
+title cards carried the paper's hook and nothing identified the series.
+
+It is **ML Papers of the Day** (owner, 2026-08-13).
+
+The cold open now runs in three beats — name the series, name the thread the
+three papers share, then tease each one — rather than three hooks in a row with
+no framing. The outro returns to that thread. The prompt is explicit that if the
+honest answer is "same field, nothing more", it should say something true and
+small rather than invent a theme.
+
+**Register: light persona.** Chosen from three options against the owner's
+reference channels. Structural borrowing — open on a gap in what the viewer
+believes rather than on the finding, second person, deliberately varied sentence
+length — plus a consistent presenter warmth and the series name. Explicitly **no**
+catchphrases and no host character; the prompt names and bans the obvious
+borrowed signatures, because pastiche was the main risk in leaning any further.
+
+The varied-sentence-length rule does double duty: it is also where the pauses
+come from inside a scene, since punctuation is what a synthesised read breathes on.
+
+---
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
@@ -889,7 +1113,7 @@ blocks publishing one automatically.
 | — | **Channel + OAuth client** | §3 Stage 10 | Prerequisite for the audit and for `pipeline youtube-auth`: a Google Cloud project with the YouTube Data API enabled and a Desktop-app OAuth client. Not created. |
 | — | **Turning the schedule on** | §5 | Decided and built (D25), but deliberately inert: the cron job is gated behind the `EPISODE_ENABLED` repo variable, and the two API secrets are not set. Owner action, one command. |
 | — | **Music bed track** | §3 Stage 8, §8 Q4 | Supported but off; needs a licensed file in `assets/music/` (D21). |
-| — | **Branding / series name** | §8 Q3 | Never asked. Title cards currently carry the paper's own hook and no series identity, which works but is anonymous. |
+| ✓ | **Branding / series name** | §8 Q3 | **Resolved 2026-08-13: "ML Papers of the Day"** (D30). The cold open names it and the opening card carries it. |
 
 ## Prompt changelog
 
@@ -900,3 +1124,7 @@ blocks publishing one automatically.
 | 2026-08-07 | `script` | v1 | Initial SceneManifest prompt. Speech rules rather than prose rules: spoken numbers, no LaTeX/markdown, hook first, close on the caveat. Pacing derived from `words_per_minute` so `est_seconds` is computable rather than guessed. |
 | 2026-08-07 | `episode` | v1 | Episode wrapper: cold open, outro, ≤70-char YouTube title, description reusing the Stage 4 justifications, 3 thumbnail options. Split from `script` because it needs all three digests at once. |
 | 2026-08-07 | `rank` | v1 | Initial. Ranks enriched candidates on claim crispness, real visual assets, breadth of interest and honest framing. States the subfield-diversity and must-have-figures constraints (both also enforced in code, D14). Tells the model that `hf_upvotes` is attention rather than quality. `justification` is written for a viewer because it is reused verbatim in the episode description. |
+| 2026-08-11 | `script` | v2 | Stops offering the caveat and the "why it matters" as alternatives — v1 said one *or* the other and the model took the caveat in all three segments of the first episode, ending every paper on its weakest note. v2 requires both, caveat second-to-last and the close last. Backlog note 4. |
+| 2026-08-13 | `script` | v3 | Length becomes a hard cap (scene limit + per-scene word budget) after v2 ran 50% over three times; Stage 6 now enforces the scene cap in code. Narration shape borrows structure from explainer channels: open on a gap in what the viewer believes, second person, deliberately varied sentence length. No catchphrases. D29, D30. |
+| 2026-08-13 | `episode` | v3 | Names the series ("ML Papers of the Day") and restructures the cold open into three beats — series, shared thread, then the papers. Outro returns to the thread. Resolves §8 Q3. D30. |
+| 2026-08-11 | `episode` | v2 | Adds `transitions`: one bridge line before each paper, including the first. Each is a single spoken sentence that settles what just played and turns toward what is next, plus a two-to-five-word `label` for the card. Carries a ban list, because every obvious phrasing here ("next up", "moving on", numbering the papers) is a dead one, and a worked good/bad example. Backlog note 3, D26. |

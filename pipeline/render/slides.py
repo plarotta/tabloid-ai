@@ -1,8 +1,14 @@
 """Slide composition with Pillow.
 
-The spec's visual system, implemented literally: dark background, a single accent
-colour, large type, and paper figures on **light cards** with their source
-attribution burned in. Figures are the star; everything else stays out of the way.
+The spec's visual system, revised after the owner review: a **paper-white
+ground**, **one accent per paper**, large type, and paper figures on white cards
+with their source attribution burned in. Figures are the star; everything else
+stays out of the way.
+
+The two departures from the spec's original wording ("dark background, single
+accent colour") are deliberate and recorded in DECISIONS.md D27. The dark ground
+read as heavy across a whole episode, and a single accent across all three papers
+was most of what made 27 scenes feel like one undifferentiated deck.
 
 Every slide shares the same chrome so the frame reads as one system rather than
 four unrelated layouts:
@@ -31,14 +37,51 @@ log = logging.getLogger(__name__)
 
 # --- visual system -----------------------------------------------------------
 
-BG = (15, 17, 21)  # near-black
-FG = (233, 237, 243)
-DIM = (146, 156, 170)
-FAINT = (58, 64, 76)  # rules and inactive progress
-ACCENT = (122, 162, 247)  # the single accent colour
-CARD = (250, 250, 248)  # light card the figures sit on
+BG = (247, 246, 243)  # paper
+FG = (26, 28, 34)
+DIM = (106, 111, 124)
+FAINT = (216, 214, 208)  # rules and inactive progress
+CARD = (255, 255, 255)  # the card figures sit on
+ACCENT = (198, 76, 42)  # fallback only - real slides carry a per-part accent
+
+# One accent per paper, in the episode's running order, so each segment reads as
+# its own chapter. The owner review's "one long PowerPoint deck" was not about
+# the slide mix - it was 27 scenes sharing a single hue.
+PAPER_ACCENTS = [
+	(198, 76, 42),  # rust
+	(30, 122, 110),  # teal
+	(59, 79, 168),  # indigo
+]
+
+# The cold open and outro are the frame around the papers, not papers themselves,
+# so they take a neutral graphite. Colour belongs to the content.
+SERIES_ACCENT = (69, 75, 90)
+
+
+def accent_for(index: int | None) -> tuple[int, int, int]:
+	"""Accent for the paper at `index` in running order; graphite for the wrapper."""
+	if index is None:
+		return SERIES_ACCENT
+	return PAPER_ACCENTS[index % len(PAPER_ACCENTS)]
+
 
 MARGIN = 110
+
+
+def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+	"""Blend two palette colours. `t` is how much of `b` to take."""
+	return tuple(round(x + (y - x) * t) for x, y in zip(a, b, strict=True))  # type: ignore[return-value]
+
+
+def tint(accent: tuple[int, int, int], t: float = 0.12) -> tuple[int, int, int]:
+	"""The accent washed into the ground - a tinted panel, not a colour field.
+
+	Used for the bridge card. At full strength a five-second accent field is a
+	flashbang; on the plain ground it would be indistinguishable from a title
+	card, which is the whole problem the bridge exists to solve.
+	"""
+	return mix(BG, accent, t)
+
 
 _BOLD = [
 	"/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -85,6 +128,13 @@ class SlideContext:
 	eyebrow: str = ""
 	scene_index: int = 0
 	scene_total: int = 0
+	# Which paper's colour this part wears. None is the wrapper (cold open,
+	# outro), which stays neutral. Set by Stage 8 from the running order.
+	paper_index: int | None = None
+
+	@property
+	def accent(self) -> tuple[int, int, int]:
+		return accent_for(self.paper_index)
 
 	def scaled(self, at_1080: float) -> int:
 		"""Scale a 1080p-designed measurement to the configured frame height.
@@ -183,7 +233,7 @@ def chrome(draw: ImageDraw.ImageDraw, ctx: SlideContext, show_eyebrow: bool = Tr
 		h = max(ctx.scaled(4), 2)
 		draw.rectangle([x1, y, x2, y + h], fill=FAINT)
 		frac = min(max((ctx.scene_index + 1) / ctx.scene_total, 0.0), 1.0)
-		draw.rectangle([x1, y, x1 + int(bar_w * frac), y + h], fill=ACCENT)
+		draw.rectangle([x1, y, x1 + int(bar_w * frac), y + h], fill=ctx.accent)
 
 
 # --- slide types -------------------------------------------------------------
@@ -196,11 +246,13 @@ def title_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, title or "", _BOLD, box, ctx.scaled(460), start=ctx.scaled(96))
+	# Sized to command the frame. A title card holds for four seconds with nothing
+	# else on it, so type that merely fits reads as an empty slide.
+	font, lines = fit_text(d, title or "", _BOLD, box, ctx.scaled(620), start=ctx.scaled(124))
 	sf = regular(ctx.scaled(36))
 	sub_lines = wrap(d, subtitle, sf, box) if subtitle else []
 
-	rule_h = ctx.scaled(8)
+	rule_h = ctx.scaled(10)
 	gap = ctx.scaled(46)
 	total = rule_h + gap + block_height(lines, font)
 	if sub_lines:
@@ -209,10 +261,79 @@ def title_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image
 	# Optically centred: a title block reads better slightly above true centre.
 	y = max(int((ctx.height - total) / 2) - ctx.scaled(30), ctx.scaled(120))
 
-	d.rectangle([m, y, m + ctx.scaled(96), y + rule_h], fill=ACCENT)
+	d.rectangle([m, y, m + ctx.scaled(132), y + rule_h], fill=ctx.accent)
 	y = draw_lines(d, lines, font, m, y + rule_h + gap, FG)
 	if sub_lines:
 		draw_lines(d, sub_lines, sf, m, y + ctx.scaled(30), DIM, 1.35)
+
+	chrome(d, ctx, show_eyebrow=False)
+	return img
+
+
+def _tracked_width(draw, text: str, font, tracking: int) -> float:
+	return sum(draw.textlength(c, font=font) for c in text) + tracking * max(len(text) - 1, 0)
+
+
+def _draw_tracked(draw, text: str, font, x: float, y: float, fill, tracking: int) -> None:
+	"""Letter-spaced text. Pillow has no tracking, and a kicker set solid reads as
+	a label rather than as a mark."""
+	for ch in text:
+		draw.text((x, y), ch, font=font, fill=fill)
+		x += draw.textlength(ch, font=font) + tracking
+
+
+def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Image:
+	"""The bridge between two parts of the episode.
+
+	Deliberately the one slide type that does not sit on `BG`. Its job is to be
+	unmistakably not-a-segment for the few seconds it holds: without a change of
+	ground it would read as one more title card, which is exactly the "one long
+	PowerPoint deck" the owner review described.
+
+	The wash is the *incoming* paper's accent, so the colour of the next chapter
+	arrives a beat before the chapter does.
+	"""
+	img = Image.new("RGB", (ctx.width, ctx.height), tint(ctx.accent))
+	d = ImageDraw.Draw(img)
+	m = ctx.scaled(MARGIN)
+	box = ctx.width - 2 * m
+
+	font, lines = fit_text(d, label or "", _BOLD, box, ctx.scaled(300), start=ctx.scaled(84))
+	mf = bold(ctx.scaled(30))
+	tracking = ctx.scaled(7)
+
+	rule_h = max(ctx.scaled(3), 1)
+	gap = ctx.scaled(44)
+	# More room under the label than above it: the rule has to clear descenders,
+	# which the line-height alone does not guarantee.
+	under = int(gap * 1.5)
+	total = block_height(lines, font) + under + rule_h
+	if marker:
+		total += int(mf.size * 1.2) + gap
+	y = max(int((ctx.height - total) / 2), ctx.scaled(120))
+
+	if marker:
+		_draw_tracked(
+			d,
+			marker,
+			mf,
+			(ctx.width - _tracked_width(d, marker, mf, tracking)) / 2,
+			y,
+			ctx.accent,
+			tracking,
+		)
+		y += int(mf.size * 1.2) + gap
+
+	for line in lines:
+		w = d.textlength(line, font=font)
+		d.text(((ctx.width - w) / 2, y), line, font=font, fill=FG)
+		y += int(font.size * 1.26)
+
+	# A rule that runs most of the frame, unlike the short accent mark a title
+	# card opens with - the two must not be mistaken for each other.
+	y += under
+	rw = int(ctx.width * 0.62)
+	d.rectangle([(ctx.width - rw) / 2, y, (ctx.width + rw) / 2, y + rule_h], fill=ctx.accent)
 
 	chrome(d, ctx, show_eyebrow=False)
 	return img
@@ -243,7 +364,7 @@ def bullet_slide(ctx: SlideContext, title: str, bullets: list[str]) -> Image.Ima
 	dot = ctx.scaled(15)
 	for w in wrapped:
 		cy = y + int(bf.size * 0.46)
-		d.ellipse([m, cy, m + dot, cy + dot], fill=ACCENT)
+		d.ellipse([m, cy, m + dot, cy + dot], fill=ctx.accent)
 		y = draw_lines(d, w, bf, m + indent, y, FG) + spacing
 
 	chrome(d, ctx)
@@ -269,7 +390,7 @@ def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Imag
 
 	for line in lines:
 		w = d.textlength(line, font=font)
-		d.text(((ctx.width - w) / 2, y), line, font=font, fill=ACCENT)
+		d.text(((ctx.width - w) / 2, y), line, font=font, fill=ctx.accent)
 		y += int(font.size * 1.2)
 
 	# Short centred rule under the number - anchors the block.
@@ -295,10 +416,13 @@ def figure_slide(
 	title: str = "",
 	caption: str = "",
 ) -> Image.Image:
-	"""A paper figure on a light card, with its source burned in.
+	"""A paper figure on a white card, with its source burned in.
 
-	The card matters: most paper figures are drawn for white paper, and dropping
-	one straight onto a dark background renders black axes and text invisible.
+	On the old near-black ground the card was doing rescue work: paper figures are
+	drawn for white paper and their black axes vanished against it. On the paper
+	ground the card is nearly the same value as the surround, so it now only marks
+	the figure's edge - which is why it carries a hairline rule rather than
+	relying on contrast alone.
 	"""
 	img = Image.new("RGB", (ctx.width, ctx.height), BG)
 	d = ImageDraw.Draw(img)
@@ -317,7 +441,9 @@ def figure_slide(
 	bottom = ctx.height - (ctx.scaled(186) if cap else ctx.scaled(140))
 
 	card = [m, top, ctx.width - m, bottom]
-	d.rounded_rectangle(card, radius=ctx.scaled(18), fill=CARD)
+	d.rounded_rectangle(
+		card, radius=ctx.scaled(18), fill=CARD, outline=FAINT, width=max(ctx.scaled(2), 1)
+	)
 
 	pad = ctx.scaled(32)
 	attr_h = ctx.scaled(40)
@@ -368,6 +494,8 @@ def figure_slide(
 def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
 	"""Dispatch a SceneManifest visual to its slide type."""
 	vtype = visual.type
+	if vtype == "transition":
+		return transition_card(ctx, visual.title or "", visual.highlight or "")
 	if vtype == "figure" and visual.figure_file and ctx.figures_dir:
 		path = ctx.figures_dir / Path(visual.figure_file).name
 		num = "".join(c for c in Path(visual.figure_file).stem if c.isdigit()).lstrip("0") or "?"
@@ -401,7 +529,9 @@ def thumbnail(
 	if figure_path is not None and figure_path.exists():
 		card_w = int(ctx.width * 0.42)
 		card = [ctx.width - m - card_w, m, ctx.width - m, ctx.height - m]
-		d.rounded_rectangle(card, radius=ctx.scaled(16), fill=CARD)
+		d.rounded_rectangle(
+			card, radius=ctx.scaled(16), fill=CARD, outline=FAINT, width=max(ctx.scaled(2), 1)
+		)
 		pad = ctx.scaled(20)
 		try:
 			fig = Image.open(figure_path)
@@ -427,7 +557,7 @@ def thumbnail(
 	y = m + ctx.scaled(40)
 	if kicker:
 		kf = bold(ctx.scaled(30))
-		d.text((m, y), kicker.upper(), font=kf, fill=ACCENT)
+		d.text((m, y), kicker.upper(), font=kf, fill=ctx.accent)
 		y += ctx.scaled(58)
 
 	font, lines = fit_text(d, text, _BOLD, text_w, ctx.height - y - m, start=ctx.scaled(104))

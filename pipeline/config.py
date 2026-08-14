@@ -85,7 +85,20 @@ class ScriptConfig(StrictModel):
 	max_concurrency: int = 3
 	# Spec Stage 6: 60-90s per paper segment, ~150 wpm narration budget.
 	target_segment_seconds: int = 75
-	cold_open_seconds: int = 12
+	# Hard ceiling on scenes per segment, enforced in code. The prompt has asked
+	# for 5-8 since v1 and the 2026-08-12 run came back with 8, 7 and 7 at ~110s
+	# each against a 75s target - stating a budget is not the same as holding one.
+	max_scenes_per_segment: int = 6
+	# Log an error when a segment's narration exceeds its word budget by more
+	# than this. Words cannot be trimmed safely in code, so this is a signal for
+	# tuning the prompt rather than an automatic fix.
+	word_budget_tolerance: float = 0.25
+	# The cold open names the series and the papers' shared thread before teasing
+	# them, so it needs more room than the three flat hooks it used to be (D30).
+	cold_open_seconds: int = 18
+	# One bridge line before each paper, including the first. Long enough to land
+	# a sentence, short enough that it reads as punctuation rather than a scene.
+	transition_seconds: int = 5
 	words_per_minute: int = 150
 
 
@@ -98,6 +111,15 @@ class TTSConfig(StrictModel):
 	provider: str | None = None
 	model: str | None = None
 	voice: str | None = None
+	# Engine-specific delivery settings, passed through untouched. ElevenLabs
+	# takes stability / similarity_boost / style / use_speaker_boost; `stability`
+	# is the one that governs how flat the read is. Empty means the voice's own
+	# defaults, which is what the first episodes shipped with.
+	voice_settings: dict = Field(default_factory=dict)
+	# Silence appended to every scene's clip, so there is a beat where the slide
+	# changes. Lives in the audio file rather than the render timeline - see
+	# `append_silence` in stages/voice.py.
+	scene_gap_seconds: float = 0.35
 	# Speaking rate for the local engine only. `say` defaults to ~175 wpm, which
 	# reads as rushed; hosted engines set their own pace and ignore this.
 	rate: int | None = 165
@@ -113,6 +135,13 @@ class RenderConfig(StrictModel):
 	# *plus* this, and the xfade consumes the overlap, so total runtime is
 	# unchanged and audio stays in sync. 0 disables.
 	crossfade_seconds: float = 0.4
+	# Cross-dissolve at the seams *between* parts (cold open, transitions,
+	# segments, outro). Longer than the within-segment fade so a part boundary
+	# reads as a section break rather than another scene change. Unlike the
+	# within-segment fade this one costs a full re-encode of the episode, because
+	# a filtergraph and a stream copy are mutually exclusive; 0 restores the
+	# stream-copy concat. See DECISIONS.md D26.
+	episode_crossfade_seconds: float = 0.6
 	# Off by default: no licensed track could be sourced, and the synthesised
 	# fallback reads as hum once it is audible. Drop a track at assets/music/ and
 	# enable this. See DECISIONS.md D21.

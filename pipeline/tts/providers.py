@@ -33,24 +33,35 @@ class TTSError(RuntimeError):
 	pass
 
 
+# `<break time="0.8s" />` and friends. ElevenLabs interprets these; `say` and the
+# OpenAI voices read them out character by character.
+_SSML = re.compile(r"<\s*break\b[^>]*/?\s*>", re.IGNORECASE)
+
+
+def strip_ssml(text: str) -> str:
+	"""Remove speech markup an engine would otherwise pronounce.
+
+	Cheap insurance rather than a live concern: no prompt emits break tags today.
+	But the failure mode if one ever does is a published episode in which the
+	narrator says "break time zero point eight s" out loud, which is worth five
+	lines to make impossible.
+	"""
+	return " ".join(_SSML.sub(" ", text).split())
+
+
 def measure_duration(path: Path) -> float:
 	"""Measured length of an audio file, in seconds.
 
-	Tries `afinfo` (macOS, always present alongside `say`) then `ffprobe`. Raises
-	rather than guessing: a wrong duration silently desynchronises the whole
-	episode timeline, which is worse than a loud failure here.
-	"""
-	if shutil.which("afinfo"):
-		try:
-			out = subprocess.run(
-				["afinfo", str(path)], capture_output=True, text=True, timeout=30, check=True
-			).stdout
-			m = re.search(r"estimated duration:\s*([\d.]+)", out)
-			if m:
-				return float(m.group(1))
-		except (subprocess.SubprocessError, OSError) as e:
-			log.debug("afinfo failed on %s: %s", path.name, e)
+	Prefers `ffprobe`, falling back to `afinfo` (macOS, always present alongside
+	`say`). Raises rather than guessing: a wrong duration silently desynchronises
+	the whole episode timeline, which is worse than a loud failure here.
 
+	**The order matters and used to be the other way round.** `afinfo` reports an
+	*estimated* duration, and for MP3 it runs about 0.25% long. Per clip that is
+	30ms and invisible; across the 29 clips of the 2026-08-12 episode it summed to
+	1.09s of timeline that did not exist in the files, which is what pushed the
+	late chapter marks past their real positions. `ffprobe` reads the container.
+	"""
 	if shutil.which("ffprobe"):
 		try:
 			out = subprocess.run(
@@ -73,6 +84,18 @@ def measure_duration(path: Path) -> float:
 				return float(out)
 		except (subprocess.SubprocessError, OSError, ValueError) as e:
 			log.debug("ffprobe failed on %s: %s", path.name, e)
+
+	if shutil.which("afinfo"):
+		try:
+			out = subprocess.run(
+				["afinfo", str(path)], capture_output=True, text=True, timeout=30, check=True
+			).stdout
+			m = re.search(r"estimated duration:\s*([\d.]+)", out)
+			if m:
+				log.debug("Measured %s with afinfo; expect ~0.25%% of over-report", path.name)
+				return float(m.group(1))
+		except (subprocess.SubprocessError, OSError) as e:
+			log.debug("afinfo failed on %s: %s", path.name, e)
 
 	raise TTSError(
 		f"Could not measure the duration of {path}. Install ffmpeg (for ffprobe) "
@@ -102,7 +125,7 @@ class MacSayTTS(TTSClient):
 		cmd = ["say", "-v", voice or self.default_voice, "-o", str(out_path)]
 		if self.rate:
 			cmd += ["-r", str(self.rate)]
-		cmd += ["--", text]
+		cmd += ["--", strip_ssml(text)]
 		try:
 			subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=True)
 		except subprocess.CalledProcessError as e:
@@ -153,7 +176,7 @@ class OpenAITTS(TTSClient):
 		out_path.parent.mkdir(parents=True, exist_ok=True)
 		client = OpenAI(api_key=key)
 		with client.audio.speech.with_streaming_response.create(
-			model=self.model, voice=voice or self.default_voice, input=text
+			model=self.model, voice=voice or self.default_voice, input=strip_ssml(text)
 		) as resp:
 			resp.stream_to_file(out_path)
 
@@ -167,15 +190,37 @@ class OpenAITTS(TTSClient):
 
 
 class ElevenLabsTTS(TTSClient):
-	"""The alternative the spec names explicitly. Highest quality, highest cost."""
+	"""The alternative the spec names explicitly. Highest quality, highest cost.
+
+	Two things the first pass left on the table, both of which the owner review
+	heard as "robotic":
+
+	**`voice_settings` were never sent.** Every call ran at whatever defaults the
+	voice carried. `stability` is the one that matters: high values make a voice
+	consistent and flat, which is what a five-minute read at one pitch sounds
+	like. Lower it and the delivery varies.
+
+	**`eleven_turbo_v2_5` is the latency-optimised model**, not the quality one.
+	Nothing here needs low latency - the run is batch.
+
+	`<break time="0.4s" />` in the text is honoured, but only usefully above about
+	half a second: a shorter break is absorbed by the pause the punctuation
+	already produces. Measured on this account, not assumed.
+	"""
 
 	provider = "elevenlabs"
 	suffix = ".mp3"
 
 	# "Rachel" - a neutral narration voice from the default library.
-	def __init__(self, model: str = "eleven_turbo_v2_5", voice: str = "21m00Tcm4TlvDq8ikWAM"):
+	def __init__(
+		self,
+		model: str = "eleven_multilingual_v2",
+		voice: str = "21m00Tcm4TlvDq8ikWAM",
+		settings: dict | None = None,
+	):
 		self.model = model
 		self.default_voice = voice
+		self.settings = settings or {}
 
 	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
 		key = os.environ.get("ELEVENLABS_API_KEY")
@@ -189,10 +234,13 @@ class ElevenLabsTTS(TTSClient):
 		out_path = out_path.with_suffix(self.suffix)
 		out_path.parent.mkdir(parents=True, exist_ok=True)
 		vid = voice or self.default_voice
+		body: dict = {"text": text, "model_id": self.model}
+		if self.settings:
+			body["voice_settings"] = self.settings
 		resp = httpx.post(
 			f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
 			headers={"xi-api-key": key, "accept": "audio/mpeg"},
-			json={"text": text, "model_id": self.model},
+			json=body,
 			timeout=180.0,
 		)
 		if resp.status_code != 200:
@@ -211,7 +259,12 @@ class ElevenLabsTTS(TTSClient):
 PROVIDERS = {"macos": MacSayTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS}
 
 
-def build_tts_client(provider: str | None, model: str | None = None, voice: str | None = None):
+def build_tts_client(
+	provider: str | None,
+	model: str | None = None,
+	voice: str | None = None,
+	settings: dict | None = None,
+):
 	if not provider:
 		raise TTSError(
 			f"tts.provider is not set in config.yaml. Available: {', '.join(sorted(PROVIDERS))}."
@@ -226,4 +279,7 @@ def build_tts_client(provider: str | None, model: str | None = None, voice: str 
 		kwargs["model"] = model
 	if voice:
 		kwargs["voice"] = voice
+	# Only ElevenLabs takes per-voice settings; the others would reject the kwarg.
+	if settings and cls is ElevenLabsTTS:
+		kwargs["settings"] = settings
 	return cls(**kwargs)

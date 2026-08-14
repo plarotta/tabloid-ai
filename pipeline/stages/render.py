@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
+from ..render.slides import BG as SLIDE_BG
 from ..render.slides import SlideContext, render_visual
 from ..schemas import RenderedSegment, RenderResult, SceneManifest, SegmentAudio
 from ..stage import Stage, StageError
@@ -87,6 +88,7 @@ class RenderStage(Stage):
 		out_dir: Path,
 		label: str,
 		eyebrow: str = "",
+		paper_index: int | None = None,
 	) -> list[Path]:
 		"""One PNG per narrated scene, in narration order."""
 		cfg = self.config.render
@@ -100,6 +102,7 @@ class RenderStage(Stage):
 			segment_label=label,
 			eyebrow=eyebrow,
 			scene_total=len(audio.scenes),
+			paper_index=paper_index,
 		)
 
 		out_dir.mkdir(parents=True, exist_ok=True)
@@ -119,23 +122,27 @@ class RenderStage(Stage):
 	def _xfade_filter(self, n: int, durations: list[float], fade: float) -> tuple[str, str]:
 		"""Chain n inputs with cross-dissolves. Returns (filtergraph, out_label).
 
-		Each clip is *fade* seconds longer than its scene, and every xfade consumes
-		exactly that overlap, so the finished segment still matches the narration
-		length. Offsets are cumulative on the un-padded durations for the same
-		reason.
+		Consumes streams labelled `[v0]..[vn-1]`, each *fade* seconds longer than
+		the duration it carries. Every xfade eats exactly that overlap, so the
+		result still matches the narration length. Offsets are cumulative on the
+		un-padded durations for the same reason.
+
+		Used at two scales: between the slides of one segment, and between the
+		parts of the episode. The arithmetic is identical; only what is padded
+		differs (see `_build_segment` and `_stitch_episode`).
 		"""
 		# xfade output length is `offset + len(second input)`, so with each clip
 		# padded to d+fade the offset must be the *cumulative* elapsed time minus
 		# one fade. Accumulating `d - fade` per step instead subtracts the fade
 		# once per transition and silently shortens the segment - which truncated
 		# the last two seconds of narration before this was fixed.
-		parts, prev, cum = [], "0:v", 0.0
+		parts, prev, cum = [], "v0", 0.0
 		for i in range(1, n):
 			cum += durations[i - 1]
 			offset = cum - fade
 			out = f"x{i}"
 			parts.append(
-				f"[{prev}][{i}:v]xfade=transition=fade:duration={fade:.3f}:"
+				f"[{prev}][v{i}]xfade=transition=fade:duration={fade:.3f}:"
 				f"offset={offset:.3f}[{out}]"
 			)
 			prev = out
@@ -230,9 +237,19 @@ class RenderStage(Stage):
 		return out if out.exists() else None
 
 	def _build_segment(
-		self, manifest: SceneManifest, audio: SegmentAudio, label: str, eyebrow: str = ""
+		self,
+		manifest: SceneManifest,
+		audio: SegmentAudio,
+		label: str,
+		eyebrow: str = "",
+		out_name: str = "",
+		paper_index: int | None = None,
 	) -> tuple[Path, float] | None:
-		"""Render one segment to mp4. Returns (path, duration)."""
+		"""Render one part of the episode to mp4. Returns (path, duration).
+
+		"Segment" in the loose sense: a paper segment, the cold open, the outro or
+		a bridge. They differ only in what is on the slides.
+		"""
 		cfg = self.config.render
 		out_root = self.paths.stage_dir("render")
 		work = out_root / "_work" / label
@@ -244,7 +261,12 @@ class RenderStage(Stage):
 			log.error("%s: no audio files found; cannot render", label)
 			return None
 
-		slides = self._slides_for(manifest, audio, work / "slides", label, eyebrow)
+		slides = self._slides_for(manifest, audio, work / "slides", label, eyebrow, paper_index)
+		if not slides:
+			# Every scene id in the audio was absent from the manifest, so there is
+			# nothing to show. ffmpeg would fail on an empty input list.
+			log.error("%s: no slide matched a narrated scene; cannot render", label)
+			return None
 		if len(slides) != len(clips):
 			log.warning(
 				"%s: %s slides for %s audio clips; rendering the common prefix",
@@ -308,10 +330,13 @@ class RenderStage(Stage):
 				final_audio = mixed
 
 		# 3. Video track, synced to the measured durations.
-		out = out_root / f"segment_{label}.mp4"
+		out = out_root / f"{out_name or f'segment_{label}'}.mp4"
+		# Letterbox bars must match the slide ground, or a non-16:9 render frames
+		# every slide in a colour the visual system never uses.
+		ground = "".join(f"{c:02x}" for c in SLIDE_BG)
 		scale = (
 			f"scale={cfg.width}:{cfg.height}:force_original_aspect_ratio=decrease,"
-			f"pad={cfg.width}:{cfg.height}:(ow-iw)/2:(oh-ih)/2:color=0x0f1115,"
+			f"pad={cfg.width}:{cfg.height}:(ow-iw)/2:(oh-ih)/2:color=0x{ground},"
 			f"fps={cfg.fps},format=yuv420p"
 		)
 		fade = cfg.crossfade_seconds
@@ -325,10 +350,6 @@ class RenderStage(Stage):
 			args += ["-i", str(final_audio)]
 			chain, last = self._xfade_filter(len(slides), durations, fade)
 			pre = ";".join(f"[{i}:v]{scale}[v{i}]" for i in range(len(slides)))
-			# Re-label so the xfade chain consumes the scaled streams.
-			chain = chain.replace("[0:v]", "[v0]")
-			for i in range(1, len(slides)):
-				chain = chain.replace(f"[{i}:v]", f"[v{i}]")
 			graph = f"{pre};{chain}" if chain else pre
 			run_ffmpeg(
 				[
@@ -397,6 +418,112 @@ class RenderStage(Stage):
 			)
 		return out, total
 
+	def _stitch_episode(self, parts: list[tuple[Path, float]], out: Path, work: Path) -> None:
+		"""Join the episode's parts, cross-dissolving the seams between them.
+
+		Concatenating the parts is a stream copy and free, but it puts a hard cut
+		at every join: the cold open's last frame is replaced by the next frame in
+		a single frame's time. Dissolving them needs a filtergraph, and a
+		filtergraph rules out the copy - so this re-encodes. That is the whole
+		cost of the feature, and `episode_crossfade_seconds: 0` opts out of it.
+
+		Sync is the part that is easy to get wrong. The audio here is a plain
+		concat, so nothing may move on the audio timeline; the video therefore has
+		to reach each seam at exactly the un-faded elapsed time. Padding every
+		part except the first with `fade` seconds of its own frozen *first* frame
+		buys back precisely what the xfade consumes, so part i's real content
+		still begins at `sum(durations[:i])`. Padding the *end* instead - the
+		obvious move, and what the within-segment path does because its inputs are
+		stills - would slide every part `fade` seconds early against its own
+		narration.
+
+		The trailing pad is slack, not timing: a part's encoded length can land a
+		frame short of the measured audio it was built from, and a frozen frame is
+		a better way to cover that than whatever ffmpeg does when an xfade offset
+		lands past the end of its input. `-shortest` trims it back off.
+		"""
+		cfg = self.config.render
+		fade = cfg.episode_crossfade_seconds
+		durations = [d for _, d in parts]
+
+		if fade > 0 and len(parts) > 1 and min(durations) > fade * 2:
+			args: list[str] = []
+			for path, _ in parts:
+				args += ["-i", str(path)]
+			pre = []
+			for i in range(len(parts)):
+				pad = f"stop_mode=clone:stop_duration={fade:.3f}"
+				if i:
+					pad = f"start_mode=clone:start_duration={fade:.3f}:{pad}"
+				pre.append(f"[{i}:v]tpad={pad},fps={cfg.fps},format=yuv420p,setsar=1[v{i}]")
+			chain, last = self._xfade_filter(len(parts), durations, fade)
+			mixed = "".join(f"[{i}:a]" for i in range(len(parts)))
+			graph = ";".join([*pre, chain, f"{mixed}concat=n={len(parts)}:v=0:a=1[a]"])
+			try:
+				run_ffmpeg(
+					[
+						*args,
+						"-filter_complex",
+						graph,
+						"-map",
+						f"[{last}]",
+						"-map",
+						"[a]",
+						"-c:v",
+						"libx264",
+						"-preset",
+						"medium",
+						"-crf",
+						"20",
+						"-pix_fmt",
+						"yuv420p",
+						"-r",
+						str(cfg.fps),
+						"-c:a",
+						"aac",
+						"-b:a",
+						"192k",
+						"-shortest",
+						"-movflags",
+						"+faststart",
+						str(out),
+					],
+					"cross-fading the episode seams",
+				)
+				log.info("Episode seams: %s cross-dissolve(s) at %.2fs", len(parts) - 1, fade)
+				return
+			except StageError as e:
+				# A hard-cut episode beats no episode. The parts themselves are
+				# already on disk and unaffected.
+				log.warning("Seam cross-fade failed (%s); falling back to hard cuts", e)
+		elif fade > 0 and len(parts) > 1:
+			log.warning(
+				"A part is shorter than %.2fs of cross-fade; stitching with hard cuts",
+				fade * 2,
+			)
+
+		listing = work / "episode.txt"
+		listing.parent.mkdir(parents=True, exist_ok=True)
+		listing.write_text(concat_list([p for p, _ in parts]), encoding="utf-8")
+		# Stream copy: every part came from this pipeline with identical codec
+		# settings, which is exactly when concat can avoid a re-encode.
+		run_ffmpeg(
+			[
+				"-f",
+				"concat",
+				"-safe",
+				"0",
+				"-i",
+				str(listing),
+				"-c",
+				"copy",
+				"-movflags",
+				"+faststart",
+				str(out),
+			],
+			"stitching the episode",
+		)
+
 	def run(self) -> RenderResult:
 		from .script import ScriptStage
 		from .voice import VoiceStage
@@ -436,7 +563,14 @@ class RenderStage(Stage):
 		)
 
 		# The wrapper is only rendered for a whole episode, not a --paper run.
+		# Bridges belong to it too: a standalone segment must not open mid-thought.
 		wrapper: dict[str, tuple] = {}
+		bridges: dict[str, tuple] = {}
+		# Running order drives the per-paper accent, so a segment and the bridge
+		# that introduces it wear the same colour. A --paper rebuild still needs
+		# the same index the full episode would have given it, or the standalone
+		# file comes out a different colour from the one inside the episode.
+		order = {s.arxiv_id: i for i, s in enumerate(voice.segments)}
 		if not self.ctx.paper_filter:
 			for name, audio in (("cold_open", voice.cold_open), ("outro", voice.outro)):
 				manifest = getattr(script.episode, name, None)
@@ -447,13 +581,42 @@ class RenderStage(Stage):
 					wrapper[name] = built
 					log.info("  %s -> %s (%.0fs)", name, built[0].name, built[1])
 
+			narrated = {b.arxiv_id: b for b in voice.transitions}
+			total = len(script.episode.transitions)
+			for i, t in enumerate(script.episode.transitions):
+				audio = narrated.get(t.into_arxiv_id)
+				if audio is None:
+					log.warning(
+						"Transition into %s was scripted but not narrated; that seam "
+						"stays a hard cut",
+						t.into_arxiv_id,
+					)
+					continue
+				slug = t.into_arxiv_id.replace("/", "_")
+				built = self._build_segment(
+					t.manifest(i, total),
+					audio,
+					f"transition_{slug}",
+					out_name=f"bridge_{slug}",
+					paper_index=order.get(t.into_arxiv_id),
+				)
+				if built is not None:
+					bridges[t.into_arxiv_id] = built
+					log.info("  bridge -> %s (%.0fs)", built[0].name, built[1])
+
 		rendered: list[RenderedSegment] = []
 		for seg in targets:
 			manifest = manifests.get(seg.arxiv_id)
 			if manifest is None:
 				log.warning("%s: narrated but has no script manifest; skipping", seg.arxiv_id)
 				continue
-			built = self._build_segment(manifest, seg, seg.arxiv_id, titles.get(seg.arxiv_id, ""))
+			built = self._build_segment(
+				manifest,
+				seg,
+				seg.arxiv_id,
+				titles.get(seg.arxiv_id, ""),
+				paper_index=order.get(seg.arxiv_id),
+			)
 			if built is None:
 				continue
 			path, dur = built
@@ -470,40 +633,26 @@ class RenderStage(Stage):
 		if not rendered:
 			raise StageError("No segment could be rendered.")
 
-		# Stitch cold-open -> seg1 -> seg2 -> seg3 -> outro (spec Stage 8).
+		# Stitch cold-open -> bridge -> seg1 -> bridge -> seg2 ... -> outro
+		# (spec Stage 8, plus the bridges added for the seam review).
 		episode_file = None
 		episode_seconds = 0.0
 		if not self.ctx.paper_filter:
 			order: list[tuple[Path, float]] = []
 			if "cold_open" in wrapper:
 				order.append(wrapper["cold_open"])
-			order += [(out_root / r.video_file, r.duration_seconds) for r in rendered]
+			for r in rendered:
+				# The bridge into a paper plays before it, so it reads as that
+				# paper's opening rather than the previous one's tail.
+				if r.arxiv_id in bridges:
+					order.append(bridges[r.arxiv_id])
+				order.append((out_root / r.video_file, r.duration_seconds))
 			if "outro" in wrapper:
 				order.append(wrapper["outro"])
 
 			if len(order) > 1:
 				episode = out_root / "episode.mp4"
-				listing = out_root / "_work" / "episode.txt"
-				listing.parent.mkdir(parents=True, exist_ok=True)
-				listing.write_text(concat_list([p for p, _ in order]), encoding="utf-8")
-				# Stream copy: every part came from this pipeline with identical
-				# codec settings, which is exactly when concat can avoid a re-encode.
-				run_ffmpeg(
-					[
-						"-f",
-						"concat",
-						"-safe",
-						"0",
-						"-i",
-						str(listing),
-						"-c",
-						"copy",
-						"-movflags",
-						"+faststart",
-						str(episode),
-					],
-					"stitching the episode",
-				)
+				self._stitch_episode(order, episode, out_root / "_work")
 				episode_file = episode.name
 				episode_seconds = sum(d for _, d in order)
 				log.info(

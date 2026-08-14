@@ -44,6 +44,50 @@ def timestamp(seconds: float) -> str:
 	return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def chapter_marks(voice, titles: dict[str, str]) -> list[dict]:
+	"""Chapter offsets, walking the episode in the order Stage 8 stitched it.
+
+	Bridges are part of that order, so they have to be counted here too - miss
+	them and every chapter after the first lands late by the length of the
+	bridges before it.
+
+	A bridge introduces the paper it names, so it opens that paper's chapter
+	rather than closing the previous one: clicking a chapter should land on the
+	sentence that sets the paper up.
+
+	The seam cross-fade shifts nothing. Each part is padded by exactly what the
+	dissolve consumes, so these measured offsets stay true of the finished file.
+	"""
+	bridges = {t.arxiv_id: t.duration_seconds for t in voice.transitions}
+	chapters: list[dict] = []
+	elapsed = 0.0
+
+	if voice.cold_open is not None:
+		chapters.append({"time": timestamp(0), "seconds": 0.0, "label": "Intro"})
+		elapsed += voice.cold_open.duration_seconds
+
+	for seg in voice.segments:
+		chapters.append(
+			{
+				"time": timestamp(elapsed),
+				"seconds": round(elapsed, 3),
+				"label": titles.get(seg.arxiv_id, seg.arxiv_id),
+				"arxiv_id": seg.arxiv_id,
+			}
+		)
+		elapsed += bridges.get(seg.arxiv_id, 0.0) + seg.duration_seconds
+
+	if voice.outro is not None:
+		chapters.append(
+			{"time": timestamp(elapsed), "seconds": round(elapsed, 3), "label": "Outro"}
+		)
+
+	# YouTube only renders chapters when the first one starts at 0:00.
+	if chapters and chapters[0]["seconds"] != 0.0:
+		log.warning("First chapter is not at 0:00; YouTube will ignore the chapter list")
+	return chapters
+
+
 class PackageStage(Stage):
 	name = "package"
 
@@ -120,30 +164,8 @@ class PackageStage(Stage):
 
 		# --- chapters, from measured durations --------------------------------
 		titles = {a: p.paper.title for a, p in enriched.items()}
-		chapters: list[dict] = []
-		elapsed = 0.0
-		if voice.cold_open is not None:
-			chapters.append({"time": timestamp(0), "seconds": 0.0, "label": "Intro"})
-			elapsed += voice.cold_open.duration_seconds
-		for seg in voice.segments:
-			chapters.append(
-				{
-					"time": timestamp(elapsed),
-					"seconds": round(elapsed, 3),
-					"label": titles.get(seg.arxiv_id, seg.arxiv_id),
-					"arxiv_id": seg.arxiv_id,
-				}
-			)
-			elapsed += seg.duration_seconds
-		if voice.outro is not None:
-			chapters.append(
-				{"time": timestamp(elapsed), "seconds": round(elapsed, 3), "label": "Outro"}
-			)
-			elapsed += voice.outro.duration_seconds
-
-		# YouTube only renders chapters when the first one starts at 0:00.
-		if chapters and chapters[0]["seconds"] != 0.0:
-			log.warning("First chapter is not at 0:00; YouTube will ignore the chapter list")
+		chapters = chapter_marks(voice, titles)
+		elapsed = voice.duration_seconds
 
 		# --- description, with the chapter list appended ----------------------
 		description = script.episode.description or ""

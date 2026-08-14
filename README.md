@@ -1,31 +1,31 @@
 # tabloid-ai
 
-Automated pipeline that turns the week's notable arXiv AI/ML papers into a 3-5
-minute video. `SPEC.md` is the full design; `DECISIONS.md` records every choice
-made along the way.
+Automated pipeline that turns the week's notable arXiv AI/ML papers into a short
+video series, **ML Papers of the Day**. `SPEC.md` is the full design;
+`DECISIONS.md` records every choice made along the way.
 
 **Status: all ten stages built. Stages 1-9 validated end-to-end against live
-APIs; Stage 10 (upload) runs in dry-run until a YouTube compliance audit
-clears.** A single command turns a live arXiv window into an upload-ready
-episode: **`episode.mp4` (4.9 min, 1920x1080 H.264), three standalone segments, a
-thumbnail, and metadata with chapter timestamps** — for **$1.73**.
+APIs across three episodes; Stage 10 (upload) runs in dry-run until a YouTube
+compliance audit clears.** A single command turns a live arXiv window into an
+upload-ready episode: **`episode.mp4` (5:16, 1920x1080 H.264), three standalone
+segments, a thumbnail, and metadata with chapter timestamps** — for **$1.93**.
 
 | Stage | Status | Validated against |
 |---|---|---|
-| 1 fetch | done | live arXiv API, 1,225 papers |
-| 2 shortlist | done | **live**, 1,225 real papers, $0.921 |
-| 3 enrich | done | 21 real papers end-to-end, 9 real e-prints parsed |
-| 4 rank | done | **live**, 15 real candidates, $0.102 |
-| 5 extract | done | **live**, 3 digests, 12/12 results traceable, $0.146 |
-| 6 script | done | **live**, 3 segments + wrapper, 284s est, $0.090 |
-| 7 voice | done | **live**, 27 clips, ElevenLabs Bella, 291s measured, $0.469 |
-| 8 render | done | **live**, 5 parts stitched, crossfades, <30ms A/V drift |
-| 9 package | done | **live**, episode + segments + thumbnail + chapters |
+| 1 fetch | done | live arXiv API, 1,385 papers; window marker follows the index (D31) |
+| 2 shortlist | done | **live**, 1,382 scored after exclusions, $1.032 |
+| 3 enrich | done | **live**, 15/15 papers, all LaTeX, zero failures |
+| 4 rank | done | **live**, 15 real candidates, 3 subfields, $0.099 |
+| 5 extract | done | **live**, 3 digests, every number traceable, $0.224 |
+| 6 script | done | **live**, 3 segments + wrapper + 3 bridges, 6-scene cap held, $0.099 |
+| 7 voice | done | **live**, 28 clips, ElevenLabs multilingual_v2, $0.480 |
+| 8 render | done | **live**, 8 parts, two-level crossfade, 5ms A/V drift |
+| 9 package | done | **live**, episode + segments + thumbnail + chapters (−0.09s) |
 | 10 upload | dry-run | request body validated against the real bundle; **live path blocked on a YouTube API compliance audit** |
 
-A full run is 1,225 papers → 15 shortlisted → 15 enriched → 3 finalists →
-3 digests → a scripted, narrated, rendered episode. About 10 minutes end to end,
-most of it arXiv rate limiting and ffmpeg.
+A full run is 1,385 papers → 15 shortlisted → 15 enriched → 3 finalists →
+3 digests → 28 narrated scenes → 8 rendered parts → one episode. About 10 minutes
+end to end, most of it arXiv rate limiting and ffmpeg.
 
 Scheduling is built (Tue/Thu on GitHub Actions) but **switched off** — see
 [Scheduling](#scheduling) for the one command that starts it.
@@ -226,14 +226,27 @@ Stage 6 writes markdown next to the JSON, because pacing and wording are judged
 by reading prose:
 
 ```
-runs/<date>/script/episode.md              # title, description, cold open, all segments
+runs/<date>/script/episode.md              # title, description, cold open, bridges, all segments
 runs/<date>/script/segment_<arxiv_id>.md   # one segment, scene by scene
 ```
 
+`episode.md` interleaves the bridges with the segments in the order they play,
+because the seam between two parts is the thing being reviewed. The per-segment
+files deliberately leave them out — a bridge belongs to the episode cut, not to
+the standalone segment, which has to be publishable on its own (D26).
+
 ## Known gaps
 
-- **Stage 2 headroom is thin** — $0.921 measured against a $1.00 target (D15).
-  A heavier window would breach it.
+- **The episode runs long.** 5:16 against a 4:30 target (D29). Segments are close
+  — 250s against 225s — but the wrapper grew to 66s once the cold open had to
+  name the series and the shared thread (D30). Trimming means the wrapper, not
+  the papers.
+- **Stage 2 headroom is gone, not thin** — $1.03 measured against a $1.00 target
+  on the last two runs (D15). The target needs raising or the batch size
+  revisiting.
+- **A run during an arXiv index stall fails loudly** rather than skipping papers
+  (D31). That is the right trade, but a scheduled run can fail for reasons that
+  have nothing to do with this code — as it did on 2026-08-13.
 - **Subfield diversity is enforced on model-supplied labels**, so near-synonymous
   tags can defeat it (D16). A closed tag vocabulary in the prompt is the fix.
 - **EPS/PS figures cannot be rasterised** — needs ghostscript, which is not

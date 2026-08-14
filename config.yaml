@@ -56,7 +56,11 @@ script:
   max_concurrency: 3
   # Spec Stage 6: 60-90s per paper segment at ~150 words per minute.
   target_segment_seconds: 75
-  cold_open_seconds: 12
+  # Raised from 12: the cold open now names the series and the thread the three
+  # papers share before teasing them, which is two beats it did not have (D30).
+  cold_open_seconds: 18
+  # One bridge line before each paper, including the first.
+  transition_seconds: 5
   words_per_minute: 150
 
 budget:
@@ -104,11 +108,22 @@ models:
 # openai (and add a key) for a hosted neural voice - the interface is unchanged.
 tts:
   provider: elevenlabs
-  model: eleven_turbo_v2_5
+  # Was eleven_turbo_v2_5, which is the latency-optimised model - nothing here
+  # needs low latency, and the owner review heard the difference (D28).
+  model: eleven_multilingual_v2
   # ElevenLabs "Bella". Chosen from the samples in
   # runs/_voice_samples/elevenlabs/ after both macOS engines were rejected as
-  # robotic (DECISIONS.md D22).
+  # robotic (DECISIONS.md D22). Re-sampled 2026-08-13 - see runs/_voice_samples/.
   voice: EXAVITQu4vr4xnSDxMaL
+  # Never sent before D28, so every read ran at the voice's flat defaults.
+  # Lower stability is what buys variation across a five-minute narration.
+  voice_settings:
+    stability: 0.40
+    similarity_boost: 0.75
+    style: 0.30
+    use_speaker_boost: true
+  # A beat at every scene change, added to the clip itself.
+  scene_gap_seconds: 0.35
   words_per_minute: 150
 
 # Stage 8. Engine decision deferred to Phase 4 (see DECISIONS.md D6).
@@ -119,6 +134,9 @@ render:
   codec: h264
   # Cross-dissolve between scenes; runtime is preserved (see DECISIONS.md D21).
   crossfade_seconds: 0.4
+  # Cross-dissolve at the seams between parts. Costs a re-encode of the episode
+  # (a filtergraph rules out the stream-copy concat); 0 restores it.
+  episode_crossfade_seconds: 0.6
   # Off by default: no licensed track is shipped, and the synthesised fallback
   # reads as hum once audible. Drop a royalty-free file in assets/music/ and set
   # this to true. See DECISIONS.md D21.

@@ -16,14 +16,66 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ..paths import read_json, write_json
 from ..schemas import SceneAudio, SceneManifest, SegmentAudio, VoiceResult
 from ..stage import Stage, StageError
-from ..tts.providers import TTSError, build_tts_client
+from ..tts.providers import TTSError, build_tts_client, measure_duration
 
 log = logging.getLogger(__name__)
+
+
+def append_silence(path: Path, seconds: float, reported: float) -> float:
+	"""Pad a clip with trailing silence. Returns the duration to record.
+
+	The pause lives here, in the audio file, rather than in the render timeline,
+	because Stage 8 builds both of its tracks from whatever Stage 7 says a clip
+	measures. Padding the file means the gap flows through the timeline, the
+	chapter marks and the runtime with no further arithmetic anywhere.
+
+	Doing it after synthesis rather than asking the engine for it also makes the
+	pacing deterministic: ElevenLabs honours `<break>` only above roughly half a
+	second, and not identically across models.
+
+	`reported` is what the provider measured before padding. It is what comes
+	back if padding fails, so a missing or unhappy ffmpeg costs the pause and
+	nothing else - re-measuring an unmodified file would only risk turning a
+	cosmetic failure into a stage failure.
+	"""
+	if seconds <= 0:
+		return reported
+	# Encode by extension rather than forcing one codec: the local engine writes
+	# AIFF and the hosted ones write MP3.
+	padded = path.with_name(f"{path.stem}__padded{path.suffix}")
+	try:
+		subprocess.run(
+			[
+				"ffmpeg",
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				str(path),
+				"-af",
+				f"apad=pad_dur={seconds:.3f}",
+				str(padded),
+			],
+			capture_output=True,
+			text=True,
+			timeout=120,
+			check=True,
+		)
+		padded.replace(path)
+	except (subprocess.SubprocessError, OSError) as e:
+		log.warning("Could not pad %s (%s); using it unpadded", path.name, e)
+		padded.unlink(missing_ok=True)
+		return reported
+	return measure_duration(path)
 
 
 class VoiceStage(Stage):
@@ -47,12 +99,21 @@ class VoiceStage(Stage):
 			result = client.synthesize(
 				text, out_dir / scene.id, voice=self.config.tts.voice or None
 			)
+			# A beat between scenes. The slide changes here too, so the pause is
+			# a visual rest as much as an audible one.
+			duration = result.duration_seconds
+			gap = self.config.tts.scene_gap_seconds
+			if gap > 0 and shutil.which("ffmpeg"):
+				duration = append_silence(result.audio_path, gap, duration)
+			elif gap > 0:
+				log.warning("ffmpeg not found; scene gaps are disabled for this run")
+
 			rel = result.audio_path.relative_to(self.paths.stage_dir("voice"))
 			scenes.append(
 				SceneAudio(
 					scene_id=scene.id,
 					audio_file=str(rel),
-					duration_seconds=result.duration_seconds,
+					duration_seconds=duration,
 					characters=result.characters,
 					est_seconds=scene.est_seconds,
 				)
@@ -84,7 +145,7 @@ class VoiceStage(Stage):
 
 		cfg = self.config.tts
 		try:
-			client = build_tts_client(cfg.provider, cfg.model, cfg.voice)
+			client = build_tts_client(cfg.provider, cfg.model, cfg.voice, cfg.voice_settings)
 		except TTSError as e:
 			raise StageError(str(e)) from e
 
@@ -99,10 +160,20 @@ class VoiceStage(Stage):
 		try:
 			rendered = [self._narrate(client, m, m.arxiv_id) for m in segments]
 			# The wrapper is only narrated for a full episode, not a --paper run.
+			# Transitions are part of it: they belong to the episode cut, never to
+			# the standalone segment.
 			cold = outro = None
+			bridges: list[SegmentAudio] = []
 			if not self.ctx.paper_filter:
 				if script.episode.cold_open:
 					cold = self._narrate(client, script.episode.cold_open, "cold_open")
+				total = len(script.episode.transitions)
+				for i, t in enumerate(script.episode.transitions):
+					label = f"transition_{t.into_arxiv_id.replace('/', '_')}"
+					audio = self._narrate(client, t.manifest(i, total), label)
+					# `manifest()` reports "episode"; re-key to the paper it leads
+					# into so Stages 8 and 9 can place it.
+					bridges.append(SegmentAudio(arxiv_id=t.into_arxiv_id, scenes=audio.scenes))
 				if script.episode.outro:
 					outro = self._narrate(client, script.episode.outro, "outro")
 		except TTSError as e:
@@ -115,6 +186,7 @@ class VoiceStage(Stage):
 			voice=cfg.voice,
 			segments=rendered,
 			cold_open=cold,
+			transitions=bridges,
 			outro=outro,
 		)
 		write_json(
@@ -134,9 +206,11 @@ class VoiceStage(Stage):
 				(real / est - 1) * 100,
 			)
 		log.info(
-			"Narrated %s scenes across %s segment(s); episode audio %.0fs (%.1f min)",
+			"Narrated %s scenes across %s segment(s) plus %s bridge(s); episode audio "
+			"%.0fs (%.1f min)",
 			len(all_scenes),
 			len(rendered),
+			len(bridges),
 			result.duration_seconds,
 			result.duration_seconds / 60,
 		)

@@ -8,6 +8,7 @@ comes from.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,10 +18,10 @@ from PIL import Image
 
 from pipeline.paths import write_json
 from pipeline.render.slides import (
-	ACCENT,
 	BG,
 	CARD,
 	SlideContext,
+	accent_for,
 	bullet_slide,
 	figure_slide,
 	render_visual,
@@ -34,6 +35,7 @@ from pipeline.schemas import (
 	SceneManifest,
 	ScriptResult,
 	SegmentAudio,
+	Transition,
 	Visual,
 	VoiceResult,
 )
@@ -56,8 +58,60 @@ def test_title_card_uses_the_visual_system():
 	img = title_card(CTX, "A Clear Finding")
 	assert img.size == (640, 360)
 	cols = colours(img)
-	assert BG in cols, "dark background"
-	assert ACCENT in cols, "accent rule present"
+	assert BG in cols, "paper ground"
+	assert CTX.accent in cols, "accent rule present"
+
+
+def test_each_paper_gets_its_own_accent():
+	"""The owner review's "one long PowerPoint deck" was one hue across 27 scenes.
+	Three papers must not render the same."""
+	from pipeline.render.slides import PAPER_ACCENTS
+
+	seen = []
+	for i in range(3):
+		ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=i)
+		assert ctx.accent == PAPER_ACCENTS[i]
+		seen.append(ctx.accent in colours(title_card(ctx, "A Clear Finding")))
+	assert all(seen)
+	assert len(set(PAPER_ACCENTS)) == 3, "three distinct hues"
+
+
+def test_the_wrapper_stays_neutral():
+	"""Cold open and outro frame the papers rather than being one, so they must
+	not borrow a paper's colour."""
+	from pipeline.render.slides import PAPER_ACCENTS, SERIES_ACCENT
+
+	assert SlideContext().accent == SERIES_ACCENT
+	assert SERIES_ACCENT not in PAPER_ACCENTS
+
+
+def test_transition_card_does_not_share_the_title_card_ground():
+	"""Its whole job is to be unmistakably not-a-segment for a few seconds. On the
+	plain ground it would read as one more title card, which is the monotony it
+	exists to break."""
+	from pipeline.render.slides import tint, transition_card
+
+	ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=0)
+	cols = colours(transition_card(ctx, "Another way in", "02 / 03"))
+	assert tint(ctx.accent) in cols
+	assert BG not in cols, "the bridge must not sit on the segment ground"
+	assert colours(title_card(ctx, "Another way in")) != cols
+
+
+def test_the_bridge_wears_the_colour_of_the_paper_it_introduces():
+	"""The next chapter's colour should arrive a beat before the chapter does."""
+	from pipeline.render.slides import tint, transition_card
+
+	a = colours(transition_card(SlideContext(width=320, height=180, paper_index=0), "x", "01"))
+	b = colours(transition_card(SlideContext(width=320, height=180, paper_index=1), "x", "02"))
+	assert tint(accent_for(0)) in a and tint(accent_for(1)) in b
+	assert a != b
+
+
+def test_transition_card_renders_without_a_marker():
+	from pipeline.render.slides import transition_card
+
+	assert transition_card(CTX, "Just a label").size == (640, 360)
 
 
 def test_slides_are_not_blank():
@@ -86,15 +140,15 @@ def test_bullet_slide_without_title_is_centred():
 	assert abs(centre - full.height / 2) < full.height * 0.15
 
 
-def test_figure_slide_puts_the_figure_on_a_light_card(tmp_path: Path):
-	"""Paper figures are drawn for white paper; on a dark background their axes
-	and text disappear."""
+def test_figure_slide_puts_the_figure_on_a_white_card(tmp_path: Path):
+	"""On the paper ground the card no longer rescues the figure from a clashing
+	background, but it still marks its edge (D27)."""
 	fig = tmp_path / "fig01.png"
 	Image.new("RGB", (400, 300), (20, 90, 200)).save(fig)
 	img = figure_slide(CTX, fig, "Figure 1, arXiv:2608.00001", "A title")
 	cols = colours(img)
-	assert CARD in cols, "light card behind the figure"
-	assert BG in cols, "dark surround"
+	assert CARD in cols, "white card behind the figure"
+	assert BG in cols, "paper surround"
 
 
 def test_figure_slide_survives_a_missing_file(tmp_path: Path):
@@ -104,7 +158,8 @@ def test_figure_slide_survives_a_missing_file(tmp_path: Path):
 
 
 def test_transparent_figure_is_flattened_onto_the_card(tmp_path: Path):
-	"""RGBA figures composited onto black would render as black-on-black."""
+	"""Transparency must be flattened onto the card, not onto whatever is behind
+	it - a figure with an alpha channel would otherwise composite unpredictably."""
 	fig = tmp_path / "t.png"
 	Image.new("RGBA", (200, 150), (255, 0, 0, 0)).save(fig)
 	img = figure_slide(CTX, fig, "Figure 1, arXiv:x")
@@ -233,6 +288,61 @@ def test_voice_measures_rather_than_estimates(ctx, monkeypatch):
 	assert clip.drift_seconds == -2.0
 
 
+def test_voice_narrates_transitions_keyed_to_their_paper(ctx, monkeypatch):
+	"""Stages 8 and 9 look bridges up by the paper they lead into, so the audio
+	has to carry that id rather than the "episode" its manifest reports."""
+	manifest = seed_script(ctx, scenes=1)
+	result = ScriptResult(
+		generated_at=datetime.now(UTC),
+		segments=[manifest],
+		episode=EpisodeMetadata(
+			title="t",
+			description="d",
+			transitions=[
+				Transition(
+					into_arxiv_id="2608.00001",
+					narration="And the way in is not always physical.",
+					label="Another way in",
+					est_seconds=5.0,
+				)
+			],
+		),
+	)
+	write_json(ctx.paths.stage_dir("script") / "script.json", json.loads(result.model_dump_json()))
+	monkeypatch.setattr("pipeline.stages.voice.build_tts_client", lambda *a, **k: FakeTTS(3.0))
+	ctx.config.tts.provider = "fake"
+
+	voice = VoiceStage(ctx).run()
+	assert [t.arxiv_id for t in voice.transitions] == ["2608.00001"]
+	assert voice.transitions[0].duration_seconds == 3.0
+	# One segment scene plus the bridge, both counted toward the episode.
+	assert voice.duration_seconds == 6.0
+
+
+def test_a_paper_run_does_not_narrate_bridges(ctx, monkeypatch):
+	"""A standalone segment must not open mid-thought - that is why bridges are
+	episode-level in the first place."""
+	manifest = seed_script(ctx, scenes=1)
+	result = ScriptResult(
+		generated_at=datetime.now(UTC),
+		segments=[manifest],
+		episode=EpisodeMetadata(
+			title="t",
+			description="d",
+			transitions=[
+				Transition(into_arxiv_id="2608.00001", narration="Bridge.", est_seconds=5.0)
+			],
+		),
+	)
+	write_json(ctx.paths.stage_dir("script") / "script.json", json.loads(result.model_dump_json()))
+	monkeypatch.setattr("pipeline.stages.voice.build_tts_client", lambda *a, **k: FakeTTS(3.0))
+	ctx.config.tts.provider = "fake"
+
+	voice = VoiceStage(dataclasses.replace(ctx, paper_filter="2608.00001")).run()
+	assert voice.transitions == []
+	assert voice.cold_open is None
+
+
 def test_voice_skips_empty_narration(ctx, monkeypatch):
 	manifest = seed_script(ctx, scenes=2)
 	manifest.scenes[0].narration = "   "
@@ -309,4 +419,106 @@ def test_xfade_preserves_total_duration():
 
 def test_xfade_single_clip_has_no_transitions():
 	graph, out = _xfade(1, [5.0], 0.4)
-	assert graph == "" and out == "0:v"
+	# `v0` is the caller's own pre-scaled/padded label, so a lone clip maps
+	# straight through the same name the chain would have produced.
+	assert graph == "" and out == "v0"
+
+
+def test_xfade_consumes_prelabelled_streams():
+	"""The chain reads [v0], [v1]...; the callers label their padded streams to
+	match. It used to read raw [i:v] and get re-labelled by string replacement."""
+	graph, _ = _xfade(3, [5.0, 5.0, 5.0], 0.4)
+	assert "[v1]" in graph and "[v2]" in graph
+	assert ":v]" not in graph, "no raw input labels left for a caller to patch"
+
+
+# --- episode seams -----------------------------------------------------------
+
+PARTS = [(Path("/r/cold_open.mp4"), 12.0), (Path("/r/bridge.mp4"), 5.0), (Path("/r/seg.mp4"), 75.0)]
+
+
+def _stitch(ctx, monkeypatch, parts=PARTS, fade=0.6):
+	"""Capture the ffmpeg argv `_stitch_episode` would run."""
+	calls: list[list[str]] = []
+	monkeypatch.setattr("pipeline.stages.render.run_ffmpeg", lambda args, what: calls.append(args))
+	ctx.config.render.episode_crossfade_seconds = fade
+	work = ctx.paths.stage_dir("render") / "_work"
+	RenderStage(ctx)._stitch_episode(parts, Path("/r/episode.mp4"), work)
+	assert len(calls) == 1
+	return calls[0]
+
+
+def _graph(argv: list[str]) -> str:
+	return argv[argv.index("-filter_complex") + 1]
+
+
+def test_episode_seams_are_cross_dissolved(ctx, monkeypatch):
+	argv = _stitch(ctx, monkeypatch)
+	graph = _graph(argv)
+	assert graph.count("xfade") == len(PARTS) - 1
+	assert "-c" not in argv, "a filtergraph cannot also be a stream copy"
+
+
+def test_seam_padding_keeps_video_in_sync_with_the_audio(ctx, monkeypatch):
+	"""The audio is a plain concat, so part i's *content* must still begin at the
+	un-faded elapsed time. That holds only if each part after the first is padded
+	at the START by exactly what the dissolve eats - padding the end instead
+	slides every part `fade` seconds early against its own narration."""
+	fade = 0.6
+	graph = _graph(_stitch(ctx, monkeypatch, fade=fade))
+
+	assert f"[0:v]tpad=stop_mode=clone:stop_duration={fade:.3f}" in graph
+	assert "[0:v]tpad=start_mode" not in graph, "the first part sets the timeline"
+
+	cum = 0.0
+	for i in range(1, len(PARTS)):
+		cum += PARTS[i - 1][1]
+		assert f"[{i}:v]tpad=start_mode=clone:start_duration={fade:.3f}" in graph
+		# Dissolve ends exactly on the boundary; the start pad gives it back.
+		assert f"offset={cum - fade:.3f}" in graph
+
+
+def test_seam_audio_is_concatenated_not_faded(ctx, monkeypatch):
+	"""Cross-fading narration would clip the last syllable before each seam."""
+	graph = _graph(_stitch(ctx, monkeypatch))
+	assert f"concat=n={len(PARTS)}:v=0:a=1[a]" in graph
+	assert "acrossfade" not in graph
+
+
+def test_seam_crossfade_can_be_turned_off(ctx, monkeypatch):
+	"""0 restores the stream copy, which is the only way to avoid a re-encode."""
+	argv = _stitch(ctx, monkeypatch, fade=0.0)
+	assert "-filter_complex" not in argv
+	assert argv[argv.index("-c") + 1] == "copy"
+
+
+def test_a_part_too_short_to_dissolve_falls_back_to_hard_cuts(ctx, monkeypatch):
+	parts = [(Path("/r/a.mp4"), 12.0), (Path("/r/tiny.mp4"), 0.5)]
+	argv = _stitch(ctx, monkeypatch, parts=parts, fade=0.6)
+	assert "-filter_complex" not in argv
+
+
+def test_a_failed_seam_crossfade_still_produces_an_episode(ctx, monkeypatch):
+	"""A hard-cut episode beats no episode; the parts are already on disk."""
+	calls: list[list[str]] = []
+
+	def flaky(args, what):
+		calls.append(args)
+		if "-filter_complex" in args:
+			raise StageError("no such filter: xfade")
+
+	monkeypatch.setattr("pipeline.stages.render.run_ffmpeg", flaky)
+	ctx.config.render.episode_crossfade_seconds = 0.6
+	RenderStage(ctx)._stitch_episode(PARTS, Path("/r/episode.mp4"), ctx.paths.stage_dir("render"))
+	assert len(calls) == 2
+	assert calls[1][calls[1].index("-c") + 1] == "copy"
+
+
+def test_speech_markup_is_stripped_for_engines_that_would_read_it():
+	"""ElevenLabs interprets <break>; `say` and the OpenAI voices pronounce it.
+	A published episode must never contain "break time zero point eight s"."""
+	from pipeline.tts.providers import strip_ssml
+
+	assert strip_ssml('One. <break time="0.8s" /> Two.') == "One. Two."
+	assert strip_ssml("One. <break time='1s'> Two.") == "One. Two."
+	assert strip_ssml("No markup here.") == "No markup here."
