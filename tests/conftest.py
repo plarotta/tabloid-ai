@@ -91,7 +91,13 @@ def config() -> Config:
 	)
 
 
-def make_paper(pid: str, title: str = "A Title", abstract: str = "An abstract.") -> Paper:
+def make_paper(
+	pid: str,
+	title: str = "A Title",
+	abstract: str = "An abstract.",
+	submitted: datetime | None = None,
+) -> Paper:
+	when = submitted or datetime(2026, 8, 6, tzinfo=UTC)
 	return Paper(
 		arxiv_id=pid,
 		title=title,
@@ -99,8 +105,8 @@ def make_paper(pid: str, title: str = "A Title", abstract: str = "An abstract.")
 		authors=["Ada Lovelace"],
 		categories=["cs.LG"],
 		primary_category="cs.LG",
-		submitted=datetime(2026, 8, 6, tzinfo=UTC),
-		updated=datetime(2026, 8, 6, tzinfo=UTC),
+		submitted=when,
+		updated=when,
 	)
 
 

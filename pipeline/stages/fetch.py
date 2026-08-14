@@ -64,18 +64,46 @@ class FetchStage(Stage):
 			self.paths.papers_jsonl,
 			[p.model_dump(mode="json") for p in papers],
 		)
-		# Recorded for the end-of-run state advance, which must move the marker to
-		# `end` rather than to "now": papers submitted while the run was working
-		# fall between the two, and anything skipped here is never covered again.
+		# Recorded for the end-of-run state advance. The marker must move to the
+		# newest paper actually seen, **not** to the requested `end`.
+		#
+		# D25 moved it to `end` on the reasoning that papers submitted during the
+		# run fall between "end" and "now". True, but it missed a bigger gap:
+		# arXiv's search index lags real time, sometimes by many hours. On
+		# 2026-08-12 the newest indexed paper was 17:58Z while `end` was 02:27Z the
+		# next day - so the marker jumped 8.5 hours past the last real data, and
+		# every paper submitted in that gap would have been skipped forever once
+		# the index caught up.
+		#
+		# `max(submitted)` is the only defensible frontier: everything up to it has
+		# demonstrably been covered, and everything after it has not been seen yet,
+		# so the next run starts exactly where the evidence stops.
+		frontier = max(p.submitted for p in papers)
+		if frontier < end:
+			log.info(
+				"arXiv's index stops at %s, %.1fh before the requested window end; "
+				"the marker follows the index, not the clock",
+				frontier.isoformat(timespec="minutes"),
+				(end - frontier).total_seconds() / 3600,
+			)
 		write_json(
 			self.paths.fetch_window_json,
-			{"start": start.isoformat(), "end": end.isoformat(), "papers": len(papers)},
+			{
+				"start": start.isoformat(),
+				"end": frontier.isoformat(),
+				"requested_end": end.isoformat(),
+				"papers": len(papers),
+			},
 		)
 		log.info("Wrote %s papers to %s", len(papers), self.paths.papers_jsonl)
 		return papers
 
 	def window_end(self) -> datetime | None:
-		"""The end of the window this run actually fetched, if it was recorded."""
+		"""The newest submission this run actually saw, if it was recorded.
+
+		Named `end` on disk for continuity, but it is the index frontier rather
+		than the requested end of the window - see `run()`.
+		"""
 		if not self.paths.fetch_window_json.exists():
 			return None
 		try:

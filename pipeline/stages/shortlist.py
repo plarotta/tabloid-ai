@@ -106,6 +106,29 @@ class ShortlistStage(Stage):
 			raise StageError("No papers from fetch stage; cannot shortlist.")
 
 		cfg = self.config.shortlist
+		# Drop anything a previous episode already used. Done here rather than at
+		# ranking because it is also the cheapest place: a paper that cannot be a
+		# finalist is not worth paying to score.
+		if cfg.exclude_covered:
+			from ..state import covered_papers
+
+			covered = covered_papers()
+			if covered:
+				kept = [p for p in papers if p.arxiv_id not in covered]
+				dropped = len(papers) - len(kept)
+				if dropped:
+					log.info(
+						"Excluding %s paper(s) already covered by a previous episode",
+						dropped,
+					)
+				if not kept:
+					raise StageError(
+						f"All {len(papers)} papers in this window have already been "
+						f"covered. Widen the window, or set shortlist.exclude_covered "
+						f"to false to allow repeats."
+					)
+				papers = kept
+
 		spec = self.config.model_for(cfg.stage_model)
 		prompt = load_prompt("shortlist")
 		client = MeteredClient.for_stage(spec, self.tracker, self.name)

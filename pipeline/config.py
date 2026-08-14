@@ -41,6 +41,10 @@ class ShortlistConfig(StrictModel):
 	shortlist_size: int = 15
 	max_concurrency: int = 4
 	min_score: float = 5.0
+	# Skip papers a previous episode already used. The window marker prevents
+	# overlap only while windows tile perfectly; once one is rewound, this is what
+	# stops a paper headlining twice. See DECISIONS.md D32.
+	exclude_covered: bool = True
 
 
 class EnrichConfig(StrictModel):

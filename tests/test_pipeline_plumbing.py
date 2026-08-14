@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
 
 from pipeline.config import Config, load_config
-from pipeline.llm import MissingAPIKey
+from pipeline.llm import MeteredClient, MissingAPIKey
 from pipeline.llm.providers import build_client
 from pipeline.paths import RunPaths, read_jsonl, write_json, write_jsonl
 from pipeline.schemas import Paper
+from pipeline.stage import StageError
 from pipeline.stages.fetch import FetchStage
 from pipeline.tts import build_tts_client
 from tests.conftest import make_paper
@@ -101,6 +102,22 @@ def test_fetch_window_falls_back_when_no_state(ctx, monkeypatch):
 	assert (end - start).days == ctx.config.fetch.fallback_window_days
 
 
+def _FakeArxiv(papers):
+	"""Stand-in for ArxivClient that returns a fixed page of results."""
+
+	class _Client:
+		def __init__(self, **kwargs):
+			pass
+
+		def search(self, categories, start, end, max_papers=None):
+			return list(papers)
+
+		def close(self):
+			pass
+
+	return _Client
+
+
 # --- advancing the fetch window ----------------------------------------------
 #
 # `state.json` is what stops consecutive runs re-covering the same papers. It is
@@ -135,6 +152,32 @@ def test_window_advances_to_the_fetch_end_not_to_now(ctx, state_file):
 	advanced = _advance_window(ctx, "fetch", None)
 	assert advanced == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
 	assert last_successful_run(state_file) == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+
+
+def test_recorded_window_end_is_the_newest_paper_not_the_requested_end(ctx, monkeypatch):
+	"""arXiv's search index lags real time. Recording the *requested* end moves
+	the marker past papers that have not been indexed yet, and they are then
+	skipped forever - which is what happened on 2026-08-12, by 8.5 hours."""
+	from pipeline.paths import read_json
+	from pipeline.stages.fetch import FetchStage
+
+	requested_end = datetime(2026, 8, 13, 2, 27, tzinfo=UTC)
+	newest = datetime(2026, 8, 12, 17, 58, tzinfo=UTC)
+	papers = [
+		make_paper("2608.00001", submitted=newest - timedelta(hours=6)),
+		make_paper("2608.00002", submitted=newest),
+	]
+
+	monkeypatch.setattr(
+		FetchStage, "window", lambda self: (requested_end - timedelta(days=4), requested_end)
+	)
+	monkeypatch.setattr("pipeline.stages.fetch.ArxivClient", _FakeArxiv(papers))
+
+	FetchStage(ctx).run()
+	recorded = read_json(ctx.paths.fetch_window_json)
+	assert datetime.fromisoformat(recorded["end"]) == newest, "marker follows the index"
+	assert datetime.fromisoformat(recorded["requested_end"]) == requested_end
+	assert FetchStage(ctx).window_end() == newest
 
 
 def test_partial_replay_does_not_advance_the_window(ctx, state_file):
@@ -203,3 +246,85 @@ def test_tts_providers_are_wired():
 		build_tts_client("nope-tts")
 	with pytest.raises(TTSError, match=r"tts\.provider is not set"):
 		build_tts_client(None)
+
+
+# --- the covered-paper ledger -------------------------------------------------
+#
+# The window marker stops overlap only while windows tile perfectly. Once one is
+# rewound - an index stall, a failed run, a manual replay - the ledger is the
+# only thing left standing between a viewer and the same paper twice.
+
+
+def test_ledger_round_trips_and_dedupes(state_file):
+	from pipeline.state import covered_papers, mark_covered
+
+	mark_covered(["a", "b"], path=state_file)
+	mark_covered(["b", "c"], path=state_file)
+	assert covered_papers(state_file) == {"a", "b", "c"}
+
+
+def test_ledger_and_marker_do_not_clobber_each_other(state_file):
+	"""Both live in state.json; writing one must preserve the other."""
+	from pipeline.state import (
+		covered_papers,
+		last_successful_run,
+		mark_covered,
+		mark_successful_run,
+	)
+
+	mark_successful_run(datetime(2026, 8, 12, 17, 58, tzinfo=UTC), path=state_file)
+	mark_covered(["2608.00001"], path=state_file)
+	assert covered_papers(state_file) == {"2608.00001"}
+	assert last_successful_run(state_file) == datetime(2026, 8, 12, 17, 58, tzinfo=UTC)
+
+	mark_successful_run(datetime(2026, 8, 13, 9, 0, tzinfo=UTC), path=state_file)
+	assert covered_papers(state_file) == {"2608.00001"}, "marker write kept the ledger"
+
+
+def test_ledger_is_bounded(state_file):
+	from pipeline.state import covered_papers, mark_covered
+
+	mark_covered([f"id{i}" for i in range(50)], path=state_file, keep=10)
+	kept = covered_papers(state_file)
+	assert len(kept) == 10
+	assert "id49" in kept and "id0" not in kept, "newest survive"
+
+
+def test_a_missing_state_file_means_no_history(state_file):
+	from pipeline.state import covered_papers
+
+	assert covered_papers(state_file) == set()
+
+
+def test_shortlist_skips_papers_a_previous_episode_used(ctx, monkeypatch, state_file):
+	from pipeline.stages.shortlist import ShortlistStage
+	from pipeline.state import mark_covered
+
+	write_jsonl(
+		ctx.paths.papers_jsonl,
+		[make_paper(f"2608.0000{i}").model_dump(mode="json") for i in (1, 2, 3)],
+	)
+	mark_covered(["2608.00002"], path=state_file)
+
+	seen = []
+
+	def fake_score(self, client, prompt, batch, index):
+		seen.extend(p.arxiv_id for p in batch)
+		return []
+
+	monkeypatch.setattr(ShortlistStage, "_score_batch", fake_score)
+	monkeypatch.setattr(MeteredClient, "for_stage", classmethod(lambda cls, s, t, n, **kw: None))
+	with pytest.raises(StageError):  # no scores come back from the stub
+		ShortlistStage(ctx).run()
+	assert seen == ["2608.00001", "2608.00003"], "the covered paper was never scored"
+
+
+def test_every_paper_covered_fails_loudly(ctx, monkeypatch, state_file):
+	"""Silently shortlisting nothing would surface three stages later."""
+	from pipeline.stages.shortlist import ShortlistStage
+	from pipeline.state import mark_covered
+
+	write_jsonl(ctx.paths.papers_jsonl, [make_paper("2608.00001").model_dump(mode="json")])
+	mark_covered(["2608.00001"], path=state_file)
+	with pytest.raises(StageError, match="already been covered"):
+		ShortlistStage(ctx).run()

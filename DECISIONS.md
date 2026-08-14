@@ -1100,6 +1100,77 @@ borrowed signatures, because pastiche was the main risk in leaning any further.
 The varied-sentence-length rule does double duty: it is also where the pauses
 come from inside a scene, since punctuation is what a synthesised read breathes on.
 
+## D31 - The window marker follows arXiv's index, not the clock
+
+The 2026-08-13 run failed at Stage 1 with "arXiv returned no papers". The window
+was empty, and the reason was not that no papers existed.
+
+**arXiv's search index lags real time.** Probed live across six windows: the
+newest indexed submission was `2026-08-12T17:58Z` in *every* one of them,
+including a seven-day lookback — the index had not advanced in roughly thirty
+hours. Meanwhile D25 had moved the marker to the previous run's requested window
+end, `2026-08-13T02:27Z`, because that is when the run happened.
+
+So the marker sat **8.5 hours past the newest paper that existed**, and the next
+window ran from there to now: a range containing nothing.
+
+The empty fetch is the harmless symptom. The real defect is silent: every paper
+submitted between 17:58 and 02:27, once the index caught up, would have been
+skipped permanently — the marker was already past them. That is exactly the
+failure D25 set out to prevent, and it went one level deeper than D25 looked.
+D25's reasoning ("papers submitted *during the run* fall between end and now")
+was right and insufficient; the gap between the index and the clock is much
+larger than the gap between the fetch and the end of the run.
+
+**The marker now advances to `max(submitted)` over the papers actually
+returned.** That is the only frontier the run has evidence for: everything up to
+it has demonstrably been covered, and everything after it has not been seen, so
+the next window starts exactly where the evidence stops. The requested end is
+still recorded alongside it as `requested_end`, for diagnosing lag.
+
+`state.json` was rewound 8.5 hours to `2026-08-12T17:58:07Z`, and
+`runs/2026-08-12/fetch/window.json` backfilled to match what the code now writes.
+
+Worth noting for the scheduled runs: this makes a run during an index stall fail
+loudly with an empty window rather than quietly skipping a day of papers. That is
+the right trade, but it means a Tue/Thu cron can fail for reasons that have
+nothing to do with this code.
+
+## D32 - A ledger of covered papers, because the marker is not a guarantee
+
+D31 made the window marker correct. It still is not *sufficient*, and the
+distinction matters: the marker prevents overlap only while windows tile
+perfectly. The moment one is rewound — after an index stall, a failed run, a
+manual replay — nothing stops a paper that already carried a segment from being
+ranked into another episode. The 2026-08-13 index stall forced exactly that
+situation: the only way to make an episode was to re-open a window whose best
+three papers had already aired.
+
+So `state.json` gains `covered_papers`: every arXiv ID that has had a segment in
+a packaged episode. It is written at the same moment the marker advances, by the
+same rule — a run that earned the marker earned the ledger entry — so the two
+cannot disagree about what a run covered.
+
+**Filtered at Stage 2, not Stage 4.** Ranking is where a repeat would actually do
+damage, but shortlisting is where it is cheapest to prevent: a paper that cannot
+become a finalist is not worth paying a model to score. Exclusion at the entry to
+the funnel also means the whole downstream pipeline is unaware the mechanism
+exists.
+
+Bounded at 400 entries. This file is a cache entry, not an archive; at three
+papers an episode that is well over a year, and a paper old enough to fall off
+the end is not one a viewer would recognise as a repeat. A cache miss degrades to
+"no history" — some risk of repetition, not breakage — which is the same
+degradation the marker already has.
+
+Emptying the window entirely is a hard failure rather than a silent one: if every
+paper in a window has been covered, Stage 2 says so and names the two ways out
+(widen the window, or set `shortlist.exclude_covered: false`). Shortlisting
+nothing would otherwise surface three stages later as an unrelated error.
+
+Backfilled from the two existing episodes, and the marker deliberately rewound to
+`2026-08-09T02:27Z` to re-open that window for a third.
+
 ---
 
 ## Deferred — not yet decided

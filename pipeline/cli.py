@@ -177,10 +177,15 @@ def _advance_window(ctx: StageContext, from_stage: str, paper: str | None):
 	the way to a packaged episode. A partial replay (`--from script`) or a
 	single-paper run has not covered a new window and must leave it alone.
 
-	It moves to the fetch window's `end`, not to now: the minutes a run spends in
-	the LLM stages would otherwise become a permanent hole in coverage.
+	It moves to the newest submission the fetch actually saw, not to now and not
+	to the requested window end: the minutes a run spends in the LLM stages, and
+	the hours arXiv's index runs behind, would otherwise become permanent holes in
+	coverage (D31).
+
+	The same run also records the papers it used, so a later window that overlaps
+	this one cannot give any of them a second segment (D32).
 	"""
-	from .state import mark_successful_run
+	from .state import mark_covered, mark_successful_run
 
 	if from_stage != "fetch" or paper:
 		return None
@@ -190,6 +195,15 @@ def _advance_window(ctx: StageContext, from_stage: str, paper: str | None):
 	if end is None:
 		return None
 	mark_successful_run(end)
+
+	try:
+		used = [m.arxiv_id for m in ScriptStage(ctx).load().segments]
+	except Exception as e:  # a packaged run without a readable script is odd, not fatal
+		console.print(f"[yellow]Could not record which papers this episode used ({e})[/yellow]")
+		used = []
+	if used:
+		mark_covered(used)
+		console.print(f"[green]Recorded {len(used)} paper(s) as covered[/green]")
 	return end
 
 
