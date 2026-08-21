@@ -9,6 +9,7 @@ comes from.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 from PIL import Image
 
 from pipeline.paths import write_json
+from pipeline.render import captions
 from pipeline.render.slides import (
 	BG,
 	CARD,
@@ -40,7 +42,7 @@ from pipeline.schemas import (
 	VoiceResult,
 )
 from pipeline.stage import StageError
-from pipeline.stages.render import RenderStage, concat_list
+from pipeline.stages.render import RenderStage, Slide, concat_list
 from pipeline.stages.voice import VoiceStage
 from pipeline.tts.base import SpeechResult, TTSClient
 
@@ -58,31 +60,28 @@ def test_title_card_uses_the_visual_system():
 	img = title_card(CTX, "A Clear Finding")
 	assert img.size == (640, 360)
 	cols = colours(img)
-	assert BG in cols, "paper ground"
+	assert BG in cols, "dark ground"
 	assert CTX.accent in cols, "accent rule present"
 
 
-def test_each_paper_gets_its_own_accent():
-	"""The owner review's "one long PowerPoint deck" was one hue across 27 scenes.
-	Three papers must not render the same."""
-	from pipeline.render.slides import PAPER_ACCENTS
+def test_every_part_wears_the_one_accent():
+	"""D27 gave each paper its own hue; D35 put episode one's single accent back.
+	Whatever the running order, the accent is the same and it reaches the frame."""
+	from pipeline.render.slides import ACCENT
 
-	seen = []
-	for i in range(3):
-		ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=i)
-		assert ctx.accent == PAPER_ACCENTS[i]
-		seen.append(ctx.accent in colours(title_card(ctx, "A Clear Finding")))
-	assert all(seen)
-	assert len(set(PAPER_ACCENTS)) == 3, "three distinct hues"
+	for index in (None, 0, 1, 2):
+		ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=index)
+		assert ctx.accent == ACCENT
+		assert ACCENT in colours(title_card(ctx, "A Clear Finding"))
 
 
-def test_the_wrapper_stays_neutral():
-	"""Cold open and outro frame the papers rather than being one, so they must
-	not borrow a paper's colour."""
-	from pipeline.render.slides import PAPER_ACCENTS, SERIES_ACCENT
+def test_the_running_order_still_indexes_the_accent_list():
+	"""The per-paper seam is kept even though the list holds one colour, because
+	a paper index out of range would raise rather than wrap."""
+	from pipeline.render.slides import PAPER_ACCENTS, accent_for
 
-	assert SlideContext().accent == SERIES_ACCENT
-	assert SERIES_ACCENT not in PAPER_ACCENTS
+	assert len(PAPER_ACCENTS) >= 1
+	assert accent_for(7) == PAPER_ACCENTS[7 % len(PAPER_ACCENTS)]
 
 
 def test_transition_card_does_not_share_the_title_card_ground():
@@ -98,14 +97,16 @@ def test_transition_card_does_not_share_the_title_card_ground():
 	assert colours(title_card(ctx, "Another way in")) != cols
 
 
-def test_the_bridge_wears_the_colour_of_the_paper_it_introduces():
-	"""The next chapter's colour should arrive a beat before the chapter does."""
+def test_the_bridge_ground_is_the_accent_washed_into_the_ground():
+	"""Under D27 the wash carried the *next* paper's hue, so the colour of the
+	coming chapter arrived a beat early. With one accent there is no such signal
+	left - the wash now only says "not a segment", which is the job that
+	survives (D35)."""
 	from pipeline.render.slides import tint, transition_card
 
-	a = colours(transition_card(SlideContext(width=320, height=180, paper_index=0), "x", "01"))
-	b = colours(transition_card(SlideContext(width=320, height=180, paper_index=1), "x", "02"))
-	assert tint(accent_for(0)) in a and tint(accent_for(1)) in b
-	assert a != b
+	for index in (0, 1, 2):
+		ctx = SlideContext(width=320, height=180, paper_index=index)
+		assert tint(accent_for(index)) in colours(transition_card(ctx, "x", "01"))
 
 
 def test_transition_card_renders_without_a_marker():
@@ -319,6 +320,44 @@ def test_voice_narrates_transitions_keyed_to_their_paper(ctx, monkeypatch):
 	assert voice.duration_seconds == 6.0
 
 
+def test_a_bridge_gets_a_longer_beat_than_a_scene_change(ctx, monkeypatch):
+	"""The bridge is a bare signpost now - "the second paper is about X" - so the
+	silence after it is what actually separates two papers (D35)."""
+	manifest = seed_script(ctx, scenes=1)
+	result = ScriptResult(
+		generated_at=datetime.now(UTC),
+		segments=[manifest],
+		episode=EpisodeMetadata(
+			title="t",
+			description="d",
+			transitions=[
+				Transition(
+					into_arxiv_id="2608.00001",
+					narration="The second paper is about inferring physics from one video.",
+					label="Physics from video",
+					est_seconds=5.0,
+				)
+			],
+		),
+	)
+	write_json(ctx.paths.stage_dir("script") / "script.json", json.loads(result.model_dump_json()))
+
+	asked: list[float] = []
+
+	def record(path, seconds, reported):
+		asked.append(seconds)
+		return reported + seconds
+
+	monkeypatch.setattr("pipeline.stages.voice.append_silence", record)
+	monkeypatch.setattr("pipeline.stages.voice.build_tts_client", lambda *a, **k: FakeTTS(3.0))
+	ctx.config.tts.provider = "fake"
+	ctx.config.tts.scene_gap_seconds = 0.35
+	ctx.config.tts.bridge_pause_seconds = 1.0
+
+	VoiceStage(ctx).run()
+	assert asked == [0.35, 1.0], "the segment scene takes the scene gap, the bridge the pause"
+
+
 def test_a_paper_run_does_not_narrate_bridges(ctx, monkeypatch):
 	"""A standalone segment must not open mid-thought - that is why bridges are
 	episode-level in the first place."""
@@ -522,3 +561,387 @@ def test_speech_markup_is_stripped_for_engines_that_would_read_it():
 	assert strip_ssml('One. <break time="0.8s" /> Two.') == "One. Two."
 	assert strip_ssml("One. <break time='1s'> Two.") == "One. Two."
 	assert strip_ssml("No markup here.") == "No markup here."
+
+
+# --- captions (D33) ----------------------------------------------------------
+
+CAP_CTX = dataclasses.replace(CTX, width=1920, height=1080)
+
+
+def test_captions_lose_no_word_of_the_narration():
+	"""The cues are the narration, re-cut. Anything else is a caption that
+	contradicts the voice track."""
+	line = "Agents fail on real workflows, and the gap is wider than reported."
+	cues = captions.cues_for(line, 6.0)
+	assert " ".join(c.text for c in cues) == line
+	assert len(cues) > 1, "a sentence this long is not one caption"
+
+
+def test_cues_tile_the_scene_exactly():
+	"""Sync comes from the cues covering the scene end to end: a gap holds the
+	previous caption over the next one's speech, an overlap truncates it."""
+	cues = captions.cues_for("One thing happened, then a second thing happened.", 9.0, start=4.0)
+	assert cues[0].start == 4.0
+	assert cues[-1].end == 13.0  # snapped, not left wherever the division landed
+	for a, b in itertools.pairwise(cues):
+		assert a.end == b.start
+	assert all(c.seconds > 0 for c in cues)
+
+
+def test_cue_length_tracks_phrase_length():
+	"""Timing is proportional to characters, which is the whole approximation."""
+	short, long_ = captions.cues_for("Tiny bit here; a very much longer stretch of words.", 10.0)
+	assert short.seconds < long_.seconds
+
+
+def test_captions_never_show_speech_markup():
+	"""The narration handed to ElevenLabs carries <break> markup. On screen it
+	would read as literal angle-bracket noise."""
+	cues = captions.cues_for('The result is clear. <break time="0.8s" /> Mostly.', 5.0)
+	assert "break" not in " ".join(c.text for c in cues)
+	assert "<" not in " ".join(c.text for c in cues)
+
+
+def test_a_runt_tail_is_folded_into_the_cue_before_it():
+	"""A two-word cue flashes for a fraction of a second and reads as a glitch."""
+	phrases = captions.split_phrases("A reasonably long opening clause here, and so.")
+	assert phrases[-1] != "and so."
+	assert phrases[-1].endswith("and so.")
+
+
+def test_captions_break_at_clauses_rather_than_mid_thought():
+	phrases = captions.split_phrases("It scores well on paper, but the audit tells another story.")
+	assert phrases[0] == "It scores well on paper,"
+
+
+def test_empty_narration_produces_no_cues():
+	assert captions.cues_for("   ", 5.0) == []
+	assert captions.cues_for("Something.", 0.0) == []
+
+
+def test_a_blank_caption_frame_is_fully_transparent():
+	"""Gaps in the caption track are covered by this frame, so anything drawn on
+	it would sit over the slide for the whole silence."""
+	assert captions.caption_image(CAP_CTX, "").getbbox() is None
+
+
+def test_the_caption_pill_stays_inside_the_reserved_band():
+	"""The band is what the slides give up. A pill outside it lands on the
+	arXiv attribution or the progress bar."""
+	ctx = dataclasses.replace(CAP_CTX)
+	band = captions.band_height(ctx)
+	box = captions.caption_image(ctx, "A caption of ordinary length.").getbbox()
+	assert box is not None
+	assert box[1] >= ctx.height - band, "pill starts above the band it was given"
+	assert box[3] <= ctx.height
+	assert box[0] >= 0 and box[2] <= ctx.width
+
+
+def test_a_long_cue_shrinks_rather_than_overflowing():
+	long_cue = "An unusually long folded caption that has to fit on one line regardless"
+	box = captions.caption_image(CAP_CTX, long_cue).getbbox()
+	assert box is not None and box[0] >= 0 and box[2] <= CAP_CTX.width
+
+
+def test_captions_drop_a_dangling_comma():
+	"""The comma is a split point, not something the viewer needs to see."""
+	with_comma = captions.caption_image(CAP_CTX, "a browser to pull data,")
+	without = captions.caption_image(CAP_CTX, "a browser to pull data")
+	assert with_comma.tobytes() == without.tobytes()
+
+
+# --- the caption band, as the slides see it ----------------------------------
+
+
+def test_the_caption_band_lifts_the_chrome_out_of_the_way():
+	banded = dataclasses.replace(CAP_CTX, caption_band=170, scene_total=6, scene_index=2)
+	plain = dataclasses.replace(CAP_CTX, scene_total=6, scene_index=2)
+	# The progress bar is the lowest thing the chrome draws.
+	assert _lowest_ink(title_card(banded, "T")) < _lowest_ink(title_card(plain, "T"))
+
+
+def test_the_caption_band_shortens_the_figure_card(tmp_path: Path):
+	fig = tmp_path / "f1.png"
+	Image.new("RGB", (400, 300), (10, 10, 10)).save(fig)
+	banded = dataclasses.replace(CAP_CTX, caption_band=170)
+	assert _lowest_ink(figure_slide(banded, fig, "Figure 1")) < _lowest_ink(
+		figure_slide(CAP_CTX, fig, "Figure 1")
+	)
+
+
+def test_without_captions_the_slides_are_composed_exactly_as_before():
+	"""`caption_band` defaults to zero, and every layout must then be untouched."""
+	assert CAP_CTX.caption_band == 0
+	assert CAP_CTX.content_height == CAP_CTX.height
+	assert CAP_CTX.fitted(620) == CAP_CTX.scaled(620)
+
+
+def _lowest_ink(img: Image.Image) -> int:
+	"""The bottom of everything drawn, ignoring the flat background."""
+	flat = Image.new("RGB", img.size, img.convert("RGB").getpixel((5, img.height // 2)))
+	from PIL import ImageChops
+
+	box = ImageChops.difference(img.convert("RGB"), flat).getbbox()
+	return box[3] if box else 0
+
+
+# --- Ken Burns and the caption overlay in the filtergraph --------------------
+
+
+def test_a_figure_slide_gets_the_biggest_move(ctx):
+	stage = RenderStage(ctx)
+	ctx.config.render.motion = True
+	figure = stage._video_chain("figure", 300)
+	bullets = stage._video_chain("bullet_slide", 300)
+	assert "zoompan" in figure and "zoompan" in bullets
+	# Amplitude shows up twice: in the ramp and in its clamp.
+	assert "1.0700" in figure and "1.0300" in bullets
+
+
+def test_a_transition_card_is_deliberately_still(ctx):
+	"""The bridge is a punctuation beat; its tinted ground already marks the
+	change, and moving it as well makes the seam busy."""
+	ctx.config.render.motion = True
+	assert "zoompan" not in RenderStage(ctx)._video_chain("transition", 300)
+
+
+def test_motion_off_restores_the_plain_scale_chain(ctx):
+	ctx.config.render.motion = False
+	chain = RenderStage(ctx)._video_chain("figure", 300)
+	assert "zoompan" not in chain and chain.startswith("scale=")
+
+
+def test_the_zoom_oversamples_so_the_crop_is_never_an_upscale(ctx):
+	"""Zooming into a natively-sized still softens it. The input is scaled up by
+	the amplitude first, so the tightest crop is still 1:1."""
+	ctx.config.render.motion = True
+	chain = RenderStage(ctx)._video_chain("figure", 300)
+	w = ctx.config.render.width
+	oversampled = int(chain.split("scale=")[1].split(":")[0])
+	assert oversampled > w
+	assert f"s={w}x{ctx.config.render.height}" in chain, "output is still frame-sized"
+
+
+def test_the_zoom_emits_one_frame_per_input_frame(ctx):
+	"""`d=1` is what keeps the frame count - and therefore every xfade offset
+	and the A/V sync - exactly as it was without motion."""
+	ctx.config.render.motion = True
+	assert "d=1:" in RenderStage(ctx)._video_chain("figure", 300)
+
+
+def test_captions_are_overlaid_after_the_dissolve_and_the_zoom(ctx):
+	"""Overlaid earlier, a caption would fade out with the slide under it at
+	every scene change and drift across the frame with the zoom."""
+	graph, label = RenderStage(ctx)._overlay_captions("[v0]zoompan=x[x1]", "x1", 4)
+	assert graph.index("zoompan") < graph.index("overlay")
+	assert "[x1][cap]overlay" in graph
+	assert label == "vout"
+
+
+def test_the_caption_track_covers_every_second_of_the_part(ctx, tmp_path: Path):
+	"""The concat demuxer has no notion of a hole: an uncovered stretch holds
+	the previous caption over it instead of clearing."""
+	cues = [captions.Cue("first", 0.0, 2.0), captions.Cue("second", 5.0, 7.0)]
+	listing = RenderStage(ctx)._caption_track(CAP_CTX, cues, 10.0, tmp_path)
+	durations = [
+		float(ln.split()[1]) for ln in listing.read_text().splitlines() if ln.startswith("duration")
+	]
+	assert sum(durations) == pytest.approx(10.0)
+	assert "blank.png" in listing.read_text()
+
+
+def test_a_scene_with_no_narration_still_advances_the_caption_track(ctx):
+	slides = [
+		Slide(Path("a.png"), "title_card", "A spoken line here."),
+		Slide(Path("b.png"), "figure", ""),
+		Slide(Path("c.png"), "result_callout", "And the number lands."),
+	]
+	cues = RenderStage(ctx)._cues(slides, [4.0, 3.0, 5.0])
+	assert cues[0].start == 0.0
+	# The silent middle scene contributes nothing, so the last scene's captions
+	# must still start at 7s rather than sliding up into the gap it left.
+	assert not any(4.0 < c.start < 7.0 for c in cues)
+	assert min(c.start for c in cues if c.start >= 4.0) == pytest.approx(7.0)
+	assert cues[-1].end == pytest.approx(12.0)
+
+
+def test_a_lone_bridge_card_does_not_warn_about_the_zoom(ctx, monkeypatch, caplog):
+	"""A bridge is one transition card: it cannot cross-dissolve with itself and
+	is deliberately still anyway, so warning about a lost move is noise."""
+	monkeypatch.setattr("pipeline.stages.render.run_ffmpeg", lambda args, what: None)
+	monkeypatch.setattr(
+		RenderStage,
+		"_slides_for",
+		lambda self, *a, **k: [Slide(Path("t.png"), "transition", "One bridging line.")],
+	)
+	manifest = SceneManifest(
+		arxiv_id="episode",
+		scenes=[
+			{
+				"id": "t1",
+				"narration": "One bridging line.",
+				"visual": {"type": "transition", "title": "Next"},
+				"est_seconds": 5.0,
+			}
+		],
+	)
+	audio = SegmentAudio(
+		arxiv_id="episode",
+		scenes=[SceneAudio(scene_id="t1", audio_file="t.aiff", duration_seconds=5.0, characters=8)],
+	)
+	(ctx.paths.stage_dir("voice") / "t.aiff").write_bytes(b"A")
+	ctx.config.render.motion = True
+	with caplog.at_level("WARNING"):
+		RenderStage(ctx)._build_segment(manifest, audio, "bridge")
+	assert "Ken Burns" not in caplog.text
+
+
+# --- animated callouts: every way of declining leaves a renderable slide ------
+
+
+def _callout_manifest(with_comparison: bool = True):
+	comparison = (
+		{
+			"template": "two_bar",
+			"label_a": "This paper",
+			"value_a": 200,
+			"label_b": "Prior rule",
+			"value_b": 20,
+			"note": "10x",
+		}
+		if with_comparison
+		else None
+	)
+	return SceneManifest(
+		arxiv_id="2608.00001",
+		scenes=[
+			{
+				"id": f"s{i + 1}",
+				"narration": f"Spoken line number {i + 1}.",
+				"visual": {
+					"type": "result_callout" if i == 1 else "title_card",
+					"title": "T",
+					"highlight": "200 tokens",
+					"comparison": comparison if i == 1 else None,
+				},
+				"est_seconds": 6.0,
+			}
+			for i in range(3)
+		],
+	)
+
+
+def _audio_for(manifest, seconds=5.0):
+	from pipeline.schemas import SceneAudio
+
+	return SegmentAudio(
+		arxiv_id=manifest.arxiv_id,
+		scenes=[
+			SceneAudio(
+				scene_id=s.id,
+				audio_file=f"{manifest.arxiv_id}/{s.id}.mp3",
+				duration_seconds=seconds,
+				characters=40,
+				est_seconds=s.est_seconds,
+			)
+			for s in manifest.scenes
+		],
+	)
+
+
+def test_a_failed_animation_still_produces_a_slide(ctx, monkeypatch, tmp_path):
+	"""Nothing about turning this on may be able to break a render: every way of
+	declining has to leave a PNG behind (D36)."""
+	monkeypatch.setattr("pipeline.render.animate.render_clip", lambda *a, **k: None)
+	ctx.config.render.animated_callouts = True
+	manifest = _callout_manifest()
+	slides = RenderStage(ctx)._slides_for(
+		manifest, _audio_for(manifest), tmp_path / "s", "seg", animate_ok=True, hold=0.4
+	)
+	assert len(slides) == 3
+	assert all(s.path.suffix == ".png" for s in slides)
+	assert not any(s.animated for s in slides)
+
+
+def test_an_animated_scene_becomes_a_clip(ctx, monkeypatch, tmp_path):
+	made = {}
+
+	def fake(visual, slide_ctx, duration, out_dir, name, **kw):
+		made["duration"] = duration
+		out_dir.mkdir(parents=True, exist_ok=True)
+		p = out_dir / f"{name}.mp4"
+		p.write_bytes(b"CLIP")
+		return p
+
+	monkeypatch.setattr("pipeline.render.animate.render_clip", fake)
+	ctx.config.render.animated_callouts = True
+	manifest = _callout_manifest()
+	slides = RenderStage(ctx)._slides_for(
+		manifest, _audio_for(manifest, 5.0), tmp_path / "s", "seg", animate_ok=True, hold=0.4
+	)
+	assert [s.animated for s in slides] == [False, True, False]
+	assert slides[1].path.suffix == ".mp4"
+	# The clip must cover the scene *and* the cross-dissolve overlap, because
+	# unlike a still it cannot simply be held for longer.
+	assert made["duration"] == pytest.approx(5.4)
+
+
+def test_nothing_animates_when_the_flag_is_off(ctx, monkeypatch, tmp_path):
+	called = []
+	monkeypatch.setattr(
+		"pipeline.render.animate.render_clip", lambda *a, **k: called.append(1) or None
+	)
+	ctx.config.render.animated_callouts = False
+	manifest = _callout_manifest()
+	RenderStage(ctx)._slides_for(
+		manifest, _audio_for(manifest), tmp_path / "s", "seg", animate_ok=True, hold=0.4
+	)
+	assert not called
+
+
+def test_nothing_animates_on_the_hard_cut_path(ctx, monkeypatch, tmp_path):
+	"""A concat script of images has nowhere to put an mp4, which is the same
+	constraint the Ken Burns move has (D33)."""
+	called = []
+	monkeypatch.setattr(
+		"pipeline.render.animate.render_clip", lambda *a, **k: called.append(1) or None
+	)
+	ctx.config.render.animated_callouts = True
+	manifest = _callout_manifest()
+	RenderStage(ctx)._slides_for(
+		manifest, _audio_for(manifest), tmp_path / "s", "seg", animate_ok=False, hold=0.0
+	)
+	assert not called
+
+
+def test_a_callout_without_a_comparison_is_never_animated(ctx, monkeypatch, tmp_path):
+	called = []
+	monkeypatch.setattr(
+		"pipeline.render.animate.render_clip", lambda *a, **k: called.append(1) or None
+	)
+	ctx.config.render.animated_callouts = True
+	manifest = _callout_manifest(with_comparison=False)
+	RenderStage(ctx)._slides_for(
+		manifest, _audio_for(manifest), tmp_path / "s", "seg", animate_ok=True, hold=0.4
+	)
+	assert not called
+
+
+def test_an_animated_slide_never_also_zooms(ctx):
+	"""It is already moving; a Ken Burns push on top reads as a wobble."""
+	ctx.config.render.motion = True
+	stage = RenderStage(ctx)
+	assert stage._amplitude("figure", animated=False) > 0
+	assert stage._amplitude("figure", animated=True) == 0.0
+	assert "zoompan" not in stage._video_chain("figure", 300, animated=True)
+
+
+def test_render_clip_declines_without_manim(ctx, monkeypatch, tmp_path):
+	from pipeline.render import animate
+	from pipeline.render.slides import SlideContext
+
+	monkeypatch.setattr(animate, "manim_available", lambda: False)
+	visual = _callout_manifest().scenes[1].visual
+	# No subprocess should be attempted at all.
+	monkeypatch.setattr(animate.subprocess, "run", lambda *a, **k: pytest.fail("manim was invoked"))
+	assert animate.render_clip(visual, SlideContext(), 5.0, tmp_path, "x") is None

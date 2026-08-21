@@ -26,6 +26,10 @@ youtube = [
     "google-auth>=2.34",
     "google-auth-oauthlib>=1.2",
 ]
+# Stage 8, animated callouts only (render.animated_callouts). Optional and
+# heavy - ~260MB with numpy, cairo and pango behind it. With it absent the
+# stage renders every callout as the still it has always been. See D36.
+manim = ["manim>=0.18,<1.0"]
 all = [
     "anthropic>=0.40",
     "openai>=1.50",
@@ -33,6 +37,7 @@ all = [
     "google-api-python-client>=2.140",
     "google-auth>=2.34",
     "google-auth-oauthlib>=1.2",
+    "manim>=0.18,<1.0",
 ]
 
 [project.scripts]
@@ -67,6 +72,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # readability more than it helps. E402: they extend sys.path before importing
 # the pipeline package so they can be run directly as scripts.
 "demos/*.py" = ["E501", "E402"]
+# Spikes are kept for their measurements, not maintained. `from manim import *`
+# is that project's own documented idiom and the file is not imported by
+# anything - see spikes/README.md.
+"spikes/*.py" = ["F403", "F405", "E501", "RUF001", "RUF046"]
 
 [tool.ruff.format]
 indent-style = "tab"

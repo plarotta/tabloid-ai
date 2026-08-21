@@ -54,13 +54,32 @@ extract:
 script:
   stage_model: script
   max_concurrency: 3
-  # Spec Stage 6: 60-90s per paper segment at ~150 words per minute.
-  target_segment_seconds: 75
-  # Raised from 12: the cold open now names the series and the thread the three
-  # papers share before teasing them, which is two beats it did not have (D30).
-  cold_open_seconds: 18
+  # Spec Stage 6: 60-90s per paper segment at ~150 words per minute - but the
+  # voice reads at 140-147, so a segment that hits this budget exactly still
+  # runs long. 70 is what puts the finished episode at ~4:46 (D34).
+  target_segment_seconds: 70
+  # Scenes are pace, words are length - the two knobs D29 conflated. A scene is
+  # a slide, so more scenes at the same word count is a faster cut, not a longer
+  # episode. Episode one ran 7-8 scenes a segment; 6 parked each slide on screen
+  # for 13.9s and saved nothing (D34). The max is enforced in code, the min is
+  # asked for in the prompt - there is no safe way to invent a scene.
+  min_scenes_per_segment: 7
+  max_scenes_per_segment: 8
+  # Over budget by more than this and the segment (or the cold open) is sent
+  # back for a shorter draft. Asking a model to *only* shorten works where
+  # stating a budget alongside everything else never has (D34). One extra call
+  # per over-long part, about a cent.
+  condense_tolerance: 0.10
+  # Passes per part. One took the worst segment 279 -> 242 words against 175:
+  # short of the budget but still moving, so it gets one more go.
+  condense_max_passes: 2
+  # Three beats - series name plus shared thread, then one tease per paper - at
+  # one scene each. 18 was never enough for that and the open ran to 34s (D34).
+  cold_open_seconds: 21
   # One bridge line before each paper, including the first.
   transition_seconds: 5
+  # The thread the cold open named, then the sign-off. Two scenes.
+  outro_seconds: 10
   words_per_minute: 150
 
 budget:
@@ -69,8 +88,11 @@ budget:
   # run that has been re-driven during development carries that history. Raised
   # 2.0 -> 3.0 once hosted TTS was added: narration is ~$0.47 and the 2026-08-07
   # run had already spent $1.49 on repeated extract/script passes, leaving too
-  # little headroom to survive a price estimate being slightly wrong.
-  ceiling_usd: 3.0
+  # little headroom to survive a price estimate being slightly wrong. Raised
+  # 3.0 -> 4.0 on 2026-08-19: Stage 2 scores every paper in the window, so the
+  # cost of a run tracks how long it has been since the last one. A 7.4-day
+  # catch-up window is 2,180 papers and ~$2.50, which left nothing for a retry.
+  ceiling_usd: 4.0
   # Per-stage soft targets; exceeding one emits a warning, not a failure.
   stage_targets_usd:
     shortlist: 1.0
@@ -124,6 +146,9 @@ tts:
     use_speaker_boost: true
   # A beat at every scene change, added to the clip itself.
   scene_gap_seconds: 0.35
+  # The rest after a bridge line, before the next paper starts. The bridge is a
+  # plain signpost now, so this pause is what marks the seam (D35).
+  bridge_pause_seconds: 1.0
   words_per_minute: 150
 
 # Stage 8. Engine decision deferred to Phase 4 (see DECISIONS.md D6).
@@ -137,6 +162,21 @@ render:
   # Cross-dissolve at the seams between parts. Costs a re-encode of the episode
   # (a filtergraph rules out the stream-copy concat); 0 restores it.
   episode_crossfade_seconds: 0.6
+  # Burn the narration into the frame. Built and validated, then turned off on
+  # the owner's review of the result (D33). Reserves the bottom ~16% of every
+  # slide, which is the part that has to be reconsidered before this goes on.
+  captions: false
+  # Ken Burns: a slow zoom across each slide. Off for the same reason (D33).
+  # Needs crossfade_seconds > 0 - the zoom is a per-slide filter and a hard-cut
+  # render has one input for the whole part. Costs render time and file size
+  # (2.5x, 1.9x), not money.
+  motion: false
+  # Animated callouts: a result_callout the model gave comparison parameters for
+  # is drawn by manim rather than Pillow (D36). Needs the `manim` extra and
+  # crossfade_seconds > 0; falls back to the static callout on anything missing,
+  # failing or slow, so turning it on cannot break a run.
+  animated_callouts: true
+  animate_timeout_seconds: 120
   # Off by default: no licensed track is shipped, and the synthesised fallback
   # reads as hum once audible. Drop a royalty-free file in assets/music/ and set
   # this to true. See DECISIONS.md D21.

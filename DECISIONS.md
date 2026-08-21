@@ -1171,6 +1171,394 @@ nothing would otherwise surface three stages later as an unrelated error.
 Backfilled from the two existing episodes, and the marker deliberately rewound to
 `2026-08-09T02:27Z` to re-open that window for a third.
 
+## D33 - Captions and motion: built, measured, and switched off
+
+Two changes to Stage 8, taken together because they answer the same objection:
+static slides with no on-screen text are how a channel reads as machine-made and
+gets swiped.
+
+**Both are off (owner, 2026-08-14).** They were built on by default, validated
+against the 2026-08-13 episode, and rejected on sight. The mechanism works and
+the numbers below hold; what was wrong was the result on screen. The code stays
+behind two config flags rather than being torn out, because the objection they
+answer has not gone away — the next attempt should reuse the timeline machinery
+and rethink the *look*, which means the caption's container and the band it
+takes out of the slide, not how the cues are timed.
+
+Recorded in full because the reasoning is what the next attempt needs.
+
+**Why captions at all.** Most mobile viewing is muted, so an episode without
+them plays as a wordless slideshow for most of its audience.
+
+The timing is *derived, not measured*. `captions.cues_for` splits a scene's
+narration into ≤36-character phrases and gives each a share of that scene's
+**measured** duration proportional to its length in characters. ElevenLabs will
+return character-level alignment from `/with-timestamps`, and it is the better
+signal - but the macOS and OpenAI adapters cannot, and a caption track that only
+lines up on one engine is worse than one that is a fraction of a second loose on
+all three. The approximation is bounded: cues tile each scene exactly, so every
+scene boundary re-syncs against measured audio and error cannot accumulate down
+a segment. Moving to real alignment later changes `cues_for` and nothing else.
+
+**One line, and the slides give up a band for it.** Two-line captions would need
+a fifth of the frame reserved on every slide, and D27 made figures the star.
+`SlideContext.caption_band` reserves ~16% instead; the chrome lifts out of it and
+the figure card shortens, which is why the band is a property of the context
+rather than something the caption renderer decides on its own.
+
+**Composited last, after the dissolve and the zoom.** Overlaid earlier, a
+caption would fade out with the slide under it at every scene change and drift
+across the frame with the Ken Burns move. It is a separate concat of transparent
+PNGs - gaps filled with a clear frame, because the concat demuxer has no notion
+of a hole and would hold the previous caption over a silence.
+
+**Ken Burns is per-slide, so it needs the cross-dissolve path.** The zoom hangs
+off each still's own input; the hard-cut path feeds one concat stream for the
+whole part and has nowhere to put it. With `crossfade_seconds: 0` the stage logs
+that it is rendering still rather than silently ignoring the setting.
+
+Amplitude is per visual type: figures 7%, everything else 3%, transition cards
+zero - a bridge is a punctuation beat and its tinted ground already marks the
+change. The still is oversampled by the amplitude before the zoom, so the
+tightest crop is still 1:1 rather than an upscale of a natively-sized slide.
+`d=1` keeps one output frame per input frame, which is what leaves every xfade
+offset - and therefore the A/V sync - exactly as it was.
+
+**Measured on the 2026-08-13 episode, re-rendered from cached audio** (Stage 8
+onward is free, so this cost nothing to validate):
+
+| | frames | duration | size | wall |
+|---|---|---|---|---|
+| both off | 9,468 | 315.605s | 12,586,544 B | 39s |
+| captions + motion | 9,468 | 315.605s | 31,067,842 B | 72s |
+
+Same frame count and the same duration to the microsecond, so the timeline
+survived both changes; with the flags off the render reproduces the pre-change
+episode to the byte, which is the regression check that matters. 152 cues across
+the episode, no narration text dropped.
+
+The costs are real but not monetary: **2.5x the file size and 1.9x the wall
+time** on 8 cores, because a slow zoom makes every frame distinct and the
+encoder can no longer coast through a static slide.
+
+**What is still open.** The cue splitting, the timing and the compositing order
+are settled and cost nothing to re-enable. What is not settled is anything a
+viewer actually sees: the caption's container (the bordered paper-white pill
+reads as a UI element rather than as type on a frame), how much of the slide the
+band is allowed to take, and whether constant slow movement suits material this
+dense. Re-enabling without answering those reproduces exactly what was rejected.
+
+
+## D34 - Length and pace are two knobs, and D29 was turning the wrong one
+
+The owner's note on the 2026-08-13 episode was that it had drifted long and slow,
+and asked for episode one's length and pace back while keeping the cold open,
+the bridges and the outro that had been added since. Those turned out to be two
+faults with two different causes, and D29 had conflated them.
+
+**The measurements first**, across the three shipped episodes:
+
+| | total | segments | wrapper | scenes/segment | s/scene |
+|---|---|---|---|---|---|
+| ep 1 (08-07) | 4:51 | 266.6s | 24.9s | 7, 7, 8 | 12.1 |
+| ep 2 (08-12) | 6:22 | 339.0s | 44.4s | 8, 7, 7 | 15.4 |
+| ep 3 (08-13) | 5:16 | 249.6s | 65.9s | 6, 6, 6 | 13.9 |
+
+Episode three's **segments were already the shortest of the three**. The runtime
+had moved into the wrapper, which nearly tripled once the cold open had to name
+the series and the shared thread (D30) and the bridges arrived (D26).
+
+And the six-scene cap D29 introduced to fix episode two's length **saved no time
+at all** — the words stayed and simply arrived in fewer, longer scenes, which is
+the "slow" the owner was hearing. Episode one ran seven and eight scenes a
+segment and was the shortest episode of the three.
+
+So: **words are length, scenes are pace.** Config now sets them separately —
+7-8 scenes a segment against 6, and the runtime taken out of the wrapper.
+
+**The narration arrives at 30-33 words a scene whatever the prompt asks for.**
+This is the finding that cost the most to learn. Measured across v1, v3 and v4,
+with the stated per-scene budget ranging from 23 to 31 words, the delivered
+figure never left that band — so the scene count, not the budget line, had been
+setting the length all along. Raising the cap to 8 with the budget unchanged
+produced a **6:27** draft, worse than anything shipped.
+
+Two things fixed it, and the order matters:
+
+1. **State the per-scene budget as a structure, not a number.** "One sentence per
+   scene; a second only if it is under eight words" is a rule the model can check
+   itself against. "About twenty-three words" is not. This alone took the draft
+   from 6:27 to 4:23.
+2. **A condense pass** (`prompts/condense/`, `ScriptStage._condense`) that sends
+   an over-budget part back asking *only* for a shorter draft. D29 ruled this out
+   on the grounds that no code can safely shorten a sentence — true, but a model
+   can, and it does that job well when it is the only job in front of it. The
+   rewrite is accepted only if it returns every scene it was given; visuals are
+   never re-sent, because the slides are already chosen. It repeats while it is
+   making progress, up to `condense_max_passes`, because one pass moves about ten
+   percent: the worst real segment went 279 → 242 → 225 against a budget of 175.
+
+With the structural rule in place the pass now rarely fires, which is the right
+outcome — it is a backstop, and about a cent when it runs.
+
+**The wrapper is measured at Stage 6 now**, in words, against its own budget.
+Episode three's wrapper ran 66s against 46s and nothing said so until a 5:16
+episode came out of Stage 8, two stages and a voice bill later.
+`cold_open_seconds` also went 18 → 21, because 18 was never enough for the three
+beats D30 asks for and the honest fix for a budget nothing can meet is the
+budget.
+
+**Validated before spending.** Stage 6 was re-driven five times against the
+cached 2026-08-13 digests for $0.62 total, predicting the finished runtime from
+word count — the narration reads at about **2.4 spoken words/sec** plus
+`tts.scene_gap_seconds` per clip.
+
+**And then the projection was corrected by the run that used it.** Calibrated on
+two episodes the rate looked like a constant 2.45 w/s; the 2026-08-19 narration
+came back at **2.33**, because the rate moves with how long the words are
+(15.25-16.62 characters/sec across four runs, 6.4-6.8 characters/word). So the
+projection is good to about **±5%**, not ±2%, and `MEASURED_WORDS_PER_SECOND` is
+now the middle of the range rather than the fast end.
+
+That 5% is the difference between two decisions. `target_segment_seconds` had
+been put back to 75 on the strength of the optimistic constant. The 2026-08-19
+segments then hit that budget almost exactly — 215, 207 and 148 words against
+187 each — and still ran **253s**, which is no shorter than the segments of the
+episode being fixed. The budget is denominated in words at 150 wpm and the voice
+reads at 140-147, so a segment that hits it is already 5% long before the scene
+gaps. It is back to **70**, which puts the finished episode at 4:46 against
+episode one's 4:51.
+
+**The ceiling went 3.0 → 4.0** at the same time, for an unrelated reason that
+surfaced here: Stage 2 scores every paper in the window, so a run costs roughly
+what the gap since the last one costs. This window was 7.4 days and 2,180 papers,
+about $2.50, which left nothing for a retry (owner, 2026-08-19).
+
+
+
+## D35 - Episode one's register and palette, restored on review
+
+The owner watched the 2026-08-19 draft and asked for three things back from the
+first episode: its **script**, its **pace**, and its **look** — keeping only the
+opening that names the series. Each is a reversal of a decision made on an
+earlier review, so each is recorded here rather than quietly applied.
+
+**Register: back to v1 (`prompts/script/v5`).** D30 chose a "light persona"
+against the owner's reference channels — open on a crack in what the viewer
+believes, second person, deliberately varied sentence length. Across three
+episodes that read as mannered rather than clear, and the draft it produced
+opened a segment on a forty-word sentence carrying three statistics. v5 is v1's
+narration rules verbatim: state the finding, no second person, no host warmth,
+report and let it land.
+
+Two things are deliberately *not* reverted with it, because they are structure
+rather than register and neither was what the review objected to: the
+caveat-then-close ordering (D26 note 4 — a segment that stops at its own
+limitation leaves the paper on its weakest note) and the whole length-and-pace
+budget from D34, which measured well and is the reason the segments are short.
+
+**Palette: back to near-black and one accent.** D27 flipped the ground to paper
+white and gave each paper its own hue, answering "too dark, too monochromatic"
+on episode two. Episode three answered back. The swap is confined to six
+constants in `render/slides.py`; D27 records the paper values, so flipping again
+is an edit to those lines rather than a rewrite. `PAPER_ACCENTS` survives as a
+list of one, because Stage 8 indexes it by running order and collapsing it to a
+constant would delete the seam a future per-paper palette hangs on.
+
+**The wrapper is the intro and nothing else.** The cold open keeps its D30 job —
+name the series, name the thread, one hook per paper. The outro is gone.
+
+**And the bridges are overruled.** D26 spent a written sentence on each seam,
+finding the real relationship between two papers, and banned numbering them:
+"never 'our second paper'". The owner asked for exactly that banned form — "a
+slight pause and a segue, like 'the second paper is about...'". So a bridge is
+now a plain signpost of at most fifteen words, and `tts.bridge_pause_seconds`
+(1.0s, against a 0.35s scene gap) does the work the sentence used to. The
+reasoning in D26 is not withdrawn and the machinery is untouched; it was
+overruled on taste, which is the owner's call. Reverting is a prompt change.
+
+**What this costs in runtime**, projected: 616 words over 31 clips, or **4:29 to
+4:37** against episode one's 4:51 — the wrapper is 20s lighter than D34 left it
+because the outro went.
+
+**Measured on the finished episode** (2026-08-19, cut once credit was restored):
+
+| | total | scenes/segment | s/slide | wrapper |
+|---|---|---|---|---|
+| ep 1 | 4:51 | 7, 7, 8 | 12.1 | 24.9s |
+| ep 3 | 5:16 | 6, 6, 6 | 13.9 | 65.9s |
+| **ep 4** | **4:20** | **8, 8, 8** | **9.0-9.8** | **37.8s** |
+
+31 clips, 7 parts, 6 cross-dissolves. The bridges came in at 4.4-5.6s each — a
+signpost and its pause — against the 7s the written ones cost. The condense pass
+fired once, on the cold open, for two words.
+
+It lands 31s under episode one rather than beside it, which is the one number
+that did not come out where D34 aimed. The wrapper is the reason: dropping the
+outro and shortening the bridges took ~28s out of it, on top of the segment
+budget. If that reads as too short, `script.target_segment_seconds` back to 75
+is the knob — worth about +15s — and it is the one that was already measured.
+
+## The 2026-08-19 run: what a mid-run credit failure leaves behind
+
+Worth recording because the failure mode is not one the design anticipated.
+
+Stage 6 writes three segments and then one wrapper call. The segments succeeded;
+the wrapper call hit `400 - Your credit balance is too low`, retried three times,
+and returned the degraded `EpisodeMetadata` that D18 put there for exactly this
+case: a wrapper failure is not worth failing an episode over. That is right when
+the wrapper is one bad JSON parse. It is wrong when the cause is an account-level
+failure that will hit every subsequent call, because the pipeline then spent
+$0.37 narrating and rendered a 4:13 episode with **no intro, no bridges and no
+title** before Stage 10 refused to publish it.
+
+Three things worked as intended and are worth keeping:
+
+- **Stage 10 caught it.** "Title is empty. Stage 6 produces it" — the bundle was
+  validated rather than uploaded, and the run exited non-zero.
+- **The window marker did not move.** `_advance_window` requires a completed
+  package stage *and* a `--from fetch` invocation; the upload failure meant
+  neither the marker nor the covered-papers ledger advanced, so the window is
+  still owed and the three papers are still eligible.
+- **Everything upstream is on disk.** Fetch through extract cost $1.98 and does
+  not need repeating; finishing needs `--from script`.
+
+**What should change.** A 400 naming the credit balance is not a transient error
+and should not be retried three times, nor swallowed by the degraded-wrapper
+path. Stage 6 should distinguish "this call failed" from "this account cannot
+make calls" and stop the run at the stage boundary, before Stage 7 spends real
+money narrating a script that has no title. Not yet implemented.
+
+
+
+## D36 - A palette role for data, and a ground that is not quite black
+
+A manim spike (below) animated one `result_callout` and immediately exposed a
+hole in the palette. The slide compared two quantities — 200 tokens per parameter
+against Chinchilla's 20 — and the baseline bar had to be drawn in `FAINT`,
+because that is the only colour between the ground and the accent. `FAINT` is the
+colour of rules and inactive chrome, so a real measurement rendered as furniture
+and all but vanished.
+
+The static slides never needed a sixth role: nothing on them is *compared*, so
+everything is either emphasis or chrome. A comparison needs a colour that means
+"this is the value being measured against", and neither an accent nor a rule will
+do it.
+
+**`BASE` = (201, 139, 63), `BASE_TEXT` = (232, 199, 154).** Warm, against the cool
+accent. Five variants were rendered against the real scene and judged on the
+frame, the way D27 chose the last palette: the baseline in the rules colour (the
+bug), a neutral slate, the accent darkened, a warm counter-colour, and the neutral
+on a lifted ground. The owner took the warm one (2026-08-20).
+
+This is a second hue on screen, which D35 had just removed — but at a different
+level. D35 removed per-paper *chapter* colour, where three papers each wore their
+own accent and the episode had no single identity. `BASE` is confined to data
+inside one slide and never marks a section, so the episode still reads as one
+colour with a comparison drawn in two.
+
+**Ground: (15, 17, 21) → (22, 26, 33).** Episode one's near-black, lifted. Large
+flat fields of it read hard once bars, braces and rules sit on top, and the
+animated slides put a lot of all three on screen. Checked across every slide type
+by re-rendering the 2026-08-19 episode from cached audio, which costs nothing:
+the figure's light card and the bridge's tinted ground both separate from the
+ground more cleanly than they did against pure black.
+
+`BASE` is defined in `render/slides.py` but not yet drawn by any static slide
+type — it exists because the palette decision was made here, and the animated
+callout that needs it is not built yet.
+
+## D37 - Animated callouts: the model fills a template, it never writes code
+
+Built on D36's spike. A `result_callout` may now carry a `Comparison` - a
+template name and its parameters - and Stage 8 renders it with manim instead of
+Pillow. Half of all segment scenes carry no real paper figure, and a callout is
+the weakest of them: a phrase frozen for nine seconds while the narration makes a
+comparison the slide never shows.
+
+**The model picks between three templates and fills them.** `two_bar` (two
+quantities at true relative length), `split` (one bar divided, for a proportion)
+and `count_up` (one number counted, with its unit). It does not emit animation
+code. A scene that compiles, reads well, matches its narration *and* is not
+subtly wrong is hard to generate and impossible to check by eye at scale; four
+numbers and two labels can be validated in full, and are.
+
+**Everything about this is designed to fail back to the slide it replaced.**
+There are five ways to decline and all of them keep the scene:
+
+  - `render.animated_callouts` off, or the `manim` extra not installed
+  - no `comparison` on the visual — a bare finding is *better* as static text
+  - the part is not cross-dissolving, because the hard-cut path concatenates
+    images and has nowhere to put an mp4 (the same constraint motion has, D33)
+  - the comparison failed validation, or its numbers are not in the digest
+  - manim failed, or ran past `animate_timeout_seconds`
+
+**Two things were learned by running it, not by designing it.**
+
+*A malformed comparison cost a whole segment.* On the first live run of prompt
+v6 the model returned a `two_bar` with no `value_b`; because the comparison was
+validated inside the `SceneManifest`, the manifest failed and the episode lost a
+paper. Comparisons are now lifted out of the payload and validated one at a
+time, exactly as transitions already are for exactly the same reason (D18) - an
+optional extra on one scene must cost that extra and nothing else.
+
+*Strict typing cost an animation for nothing.* A model returned `note: 65`
+instead of `"65"`. The value goes onto a slide as text either way, so the string
+fields coerce rather than reject.
+
+**The numbers are checked harder here than anywhere else.** A bar at a tenth the
+length of another *is* the claim - the animation is the most credible thing on
+screen - so every value must appear in the digest the segment was written from.
+This is stricter than `extract.unverifiable_numbers`, which ignores integers
+under three digits because they are everywhere in a full paper; a digest is a few
+hundred words and a two-digit baseline is precisely what gets invented. It fired
+on the first real run, on a claimed `0.5` that appeared nowhere in the digest.
+
+**What the templates cannot catch.** On that same run the model paired a
+`two_bar` of 79 against 21 with the note "65-to-1 supervision ratio" - both
+numbers real, the note describing a different ratio than the bars draw. Nothing
+in the schema can see that. The remaining exposure is semantic, and it is the
+argument for keeping the template set small and the `note` field a phrase.
+
+**Cost:** no extra API calls - the parameters come back in the same Stage 6 call.
+~3s of CPU per animated scene, against a ~40s episode render.
+
+## The manim spike: what it measured
+
+`prompts/`-driven animation is not built. One scene was hand-written against
+ManimCommunity to find out whether it is worth building, using a real callout
+from the 2026-08-19 episode (`2608.17286/s3`, measured 9.55s).
+
+| | measured |
+|---|---|
+| render | **2.85s** for a 9.55s clip at 1920x1080/30 |
+| duration accuracy | 9.567s against 9.55s — **17ms, half a frame** |
+| install | **266MB**, pure Python |
+| LaTeX | **not required** |
+
+The duration number is the one that matters. Stage 8 already knows every scene's
+*measured* audio length before it composes anything, so a manim clip can be given
+an exact `run_time` and the sync-by-construction property of D20 survives. At
+~3s a scene, animating every callout in an episode adds ~14s to a ~40s render.
+
+**`DecimalNumber` is a trap.** The obvious way to animate a counting number
+renders through `MathTex` and silently requires a full TeX install. Rebuilding a
+Pango `Text` each frame costs nothing at this size and keeps the dependency to
+what manim already needs. Any template library should ban the MathTex family
+outright.
+
+D20 rejected Remotion partly for a ~500MB dependency tree beside a Python
+codebase. Manim is roughly half that and stays in Python, so that objection does
+not transfer.
+
+**What is not answered.** The scene was hand-written; in the pipeline a model
+would have to produce it, which is the real risk and the reason to give it
+parameterised templates rather than let it emit Python. And it is the best case:
+of the five callouts in that episode, four have animatable structure and one
+("First reliable compute-optimal guidance") has no number in it at all, so the
+fallback to a static callout is a routine path rather than a safety net.
+
+
 ---
 
 ## Deferred — not yet decided

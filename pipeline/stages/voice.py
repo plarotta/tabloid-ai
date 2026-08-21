@@ -87,7 +87,9 @@ class VoiceStage(Stage):
 	def load(self) -> VoiceResult:
 		return VoiceResult.model_validate(read_json(self.paths.stage_dir("voice") / "voice.json"))
 
-	def _narrate(self, client, manifest: SceneManifest, label: str) -> SegmentAudio:
+	def _narrate(
+		self, client, manifest: SceneManifest, label: str, gap: float | None = None
+	) -> SegmentAudio:
 		out_dir = self.paths.stage_dir("voice") / label
 		scenes: list[SceneAudio] = []
 
@@ -100,12 +102,13 @@ class VoiceStage(Stage):
 				text, out_dir / scene.id, voice=self.config.tts.voice or None
 			)
 			# A beat between scenes. The slide changes here too, so the pause is
-			# a visual rest as much as an audible one.
+			# a visual rest as much as an audible one. Bridges pass a longer one:
+			# a signpost line followed by silence is the whole seam now (D35).
 			duration = result.duration_seconds
-			gap = self.config.tts.scene_gap_seconds
-			if gap > 0 and shutil.which("ffmpeg"):
-				duration = append_silence(result.audio_path, gap, duration)
-			elif gap > 0:
+			pause = self.config.tts.scene_gap_seconds if gap is None else gap
+			if pause > 0 and shutil.which("ffmpeg"):
+				duration = append_silence(result.audio_path, pause, duration)
+			elif pause > 0:
 				log.warning("ffmpeg not found; scene gaps are disabled for this run")
 
 			rel = result.audio_path.relative_to(self.paths.stage_dir("voice"))
@@ -170,7 +173,9 @@ class VoiceStage(Stage):
 				total = len(script.episode.transitions)
 				for i, t in enumerate(script.episode.transitions):
 					label = f"transition_{t.into_arxiv_id.replace('/', '_')}"
-					audio = self._narrate(client, t.manifest(i, total), label)
+					audio = self._narrate(
+						client, t.manifest(i, total), label, self.config.tts.bridge_pause_seconds
+					)
 					# `manifest()` reports "episode"; re-key to the paper it leads
 					# into so Stages 8 and 9 can place it.
 					bridges.append(SegmentAudio(arxiv_id=t.into_arxiv_id, scenes=audio.scenes))

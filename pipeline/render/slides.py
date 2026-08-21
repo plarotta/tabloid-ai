@@ -1,14 +1,13 @@
 """Slide composition with Pillow.
 
-The spec's visual system, revised after the owner review: a **paper-white
-ground**, **one accent per paper**, large type, and paper figures on white cards
-with their source attribution burned in. Figures are the star; everything else
-stays out of the way.
+The spec's visual system: a **dark ground**, a **single accent colour**, large
+type, and paper figures on light cards with their source attribution burned in.
+Figures are the star; everything else stays out of the way.
 
-The two departures from the spec's original wording ("dark background, single
-accent colour") are deliberate and recorded in DECISIONS.md D27. The dark ground
-read as heavy across a whole episode, and a single accent across all three papers
-was most of what made 27 scenes feel like one undifferentiated deck.
+This is episode one's look. D27 replaced it with a paper-white ground and one
+accent per paper, answering an owner review of episode two; D35 put it back on
+an owner review of episode three. Both palettes are recorded in the decision log
+and the swap is confined to the constants below.
 
 Every slide shares the same chrome so the frame reads as one system rather than
 four unrelated layouts:
@@ -37,29 +36,49 @@ log = logging.getLogger(__name__)
 
 # --- visual system -----------------------------------------------------------
 
-BG = (247, 246, 243)  # paper
-FG = (26, 28, 34)
-DIM = (106, 111, 124)
-FAINT = (216, 214, 208)  # rules and inactive progress
-CARD = (255, 255, 255)  # the card figures sit on
-ACCENT = (198, 76, 42)  # fallback only - real slides carry a per-part accent
+# Episode one's palette, restored on the owner's review of the third (D35). The
+# paper-white ground and the three per-paper accents that replaced it are D27,
+# and their exact values are recorded there - putting them back is an edit to
+# these six lines, not a rewrite.
+#
+# The ground is episode one's (15, 17, 21) lifted a little off pure black, which
+# is D36: large flat fields of near-black read hard once bars and rules sit on
+# them, and the animated comparison slides put a lot of both on screen.
+BG = (22, 26, 33)  # near-black, lifted off pure black (D36)
+FG = (233, 237, 243)
+DIM = (146, 156, 170)
+FAINT = (58, 64, 76)  # rules and inactive progress
+ACCENT = (122, 162, 247)  # the single accent colour
+CARD = (250, 250, 248)  # the light card figures sit on
 
-# One accent per paper, in the episode's running order, so each segment reads as
-# its own chapter. The owner review's "one long PowerPoint deck" was not about
-# the slide mix - it was 27 scenes sharing a single hue.
-PAPER_ACCENTS = [
-	(198, 76, 42),  # rust
-	(30, 122, 110),  # teal
-	(59, 79, 168),  # indigo
-]
+# Kept as a list of one. D27 gave each paper its own hue off the running order;
+# a single accent is what episode one had and what the owner asked for back. The
+# list survives because Stage 8 indexes it by running order, and collapsing that
+# to a constant would delete the seam a future per-paper palette hangs on.
+PAPER_ACCENTS = [ACCENT]
 
-# The cold open and outro are the frame around the papers, not papers themselves,
-# so they take a neutral graphite. Colour belongs to the content.
-SERIES_ACCENT = (69, 75, 90)
+# The wrapper wore a neutral graphite under D27 so it read as the frame rather
+# than a fourth chapter. With one accent across the episode there is nothing for
+# it to contrast against, so it takes the same accent as everything else.
+SERIES_ACCENT = ACCENT
+
+
+# The value a comparison is measured *against*, and the type that labels it.
+# A sixth role, added by D36: with only ground/type/dim/faint/accent, a baseline
+# bar had to borrow FAINT, which is the colour of rules and inactive chrome - so
+# real data read as furniture. Warm, because the separation from the accent is
+# the whole point and lightness alone was not carrying it.
+BASE = (201, 139, 63)
+BASE_TEXT = (232, 199, 154)
 
 
 def accent_for(index: int | None) -> tuple[int, int, int]:
-	"""Accent for the paper at `index` in running order; graphite for the wrapper."""
+	"""Accent for the paper at `index` in running order; the wrapper is `None`.
+
+	Both arms return the same colour under the single-accent palette. The
+	branch is kept because it is the only place that knows the wrapper is not a
+	paper, and that distinction outlives any particular palette.
+	"""
 	if index is None:
 		return SERIES_ACCENT
 	return PAPER_ACCENTS[index % len(PAPER_ACCENTS)]
@@ -131,10 +150,20 @@ class SlideContext:
 	# Which paper's colour this part wears. None is the wrapper (cold open,
 	# outro), which stays neutral. Set by Stage 8 from the running order.
 	paper_index: int | None = None
+	# Pixels of the bottom edge reserved for burned-in captions, which are
+	# composited later and know nothing about what a slide drew. Zero when
+	# captions are off, and every layout then behaves exactly as before.
+	caption_band: int = 0
 
 	@property
 	def accent(self) -> tuple[int, int, int]:
 		return accent_for(self.paper_index)
+
+	@property
+	def content_height(self) -> int:
+		"""The frame height a slide may actually use. Everything that centres
+		vertically or anchors to the bottom measures against this, not `height`."""
+		return self.height - self.caption_band
 
 	def scaled(self, at_1080: float) -> int:
 		"""Scale a 1080p-designed measurement to the configured frame height.
@@ -143,6 +172,15 @@ class SlideContext:
 		at another size leaves absolute pixel offsets in the wrong places.
 		"""
 		return int(at_1080 * self.height / 1080)
+
+	def fitted(self, at_1080: float) -> int:
+		"""Like `scaled`, but measured against the height a slide may use.
+
+		For the boxes that text is fitted into: reserving a caption band has to
+		shrink them, or a long title merely wraps into the space the captions
+		are about to occupy. Identical to `scaled` when captions are off.
+		"""
+		return int(at_1080 * self.content_height / 1080)
 
 
 # --- text helpers ------------------------------------------------------------
@@ -223,13 +261,15 @@ def chrome(draw: ImageDraw.ImageDraw, ctx: SlideContext, show_eyebrow: bool = Tr
 
 	if ctx.arxiv_id:
 		ff = regular(ctx.scaled(25))
-		draw.text((m, ctx.height - ctx.scaled(84)), f"arXiv:{ctx.arxiv_id}", font=ff, fill=DIM)
+		draw.text(
+			(m, ctx.content_height - ctx.scaled(84)), f"arXiv:{ctx.arxiv_id}", font=ff, fill=DIM
+		)
 
 	# Progress: a thin rule with the elapsed portion in the accent colour.
 	if ctx.scene_total > 1:
 		bar_w = ctx.scaled(260)
 		x1, x2 = ctx.width - m - bar_w, ctx.width - m
-		y = ctx.height - ctx.scaled(72)
+		y = ctx.content_height - ctx.scaled(72)
 		h = max(ctx.scaled(4), 2)
 		draw.rectangle([x1, y, x2, y + h], fill=FAINT)
 		frac = min(max((ctx.scene_index + 1) / ctx.scene_total, 0.0), 1.0)
@@ -248,7 +288,7 @@ def title_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image
 
 	# Sized to command the frame. A title card holds for four seconds with nothing
 	# else on it, so type that merely fits reads as an empty slide.
-	font, lines = fit_text(d, title or "", _BOLD, box, ctx.scaled(620), start=ctx.scaled(124))
+	font, lines = fit_text(d, title or "", _BOLD, box, ctx.fitted(620), start=ctx.scaled(124))
 	sf = regular(ctx.scaled(36))
 	sub_lines = wrap(d, subtitle, sf, box) if subtitle else []
 
@@ -259,7 +299,7 @@ def title_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image
 		total += ctx.scaled(30) + block_height(sub_lines, sf, 1.35)
 
 	# Optically centred: a title block reads better slightly above true centre.
-	y = max(int((ctx.height - total) / 2) - ctx.scaled(30), ctx.scaled(120))
+	y = max(int((ctx.content_height - total) / 2) - ctx.scaled(30), ctx.scaled(120))
 
 	d.rectangle([m, y, m + ctx.scaled(132), y + rule_h], fill=ctx.accent)
 	y = draw_lines(d, lines, font, m, y + rule_h + gap, FG)
@@ -298,7 +338,7 @@ def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Im
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, label or "", _BOLD, box, ctx.scaled(300), start=ctx.scaled(84))
+	font, lines = fit_text(d, label or "", _BOLD, box, ctx.fitted(300), start=ctx.scaled(84))
 	mf = bold(ctx.scaled(30))
 	tracking = ctx.scaled(7)
 
@@ -310,7 +350,7 @@ def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Im
 	total = block_height(lines, font) + under + rule_h
 	if marker:
 		total += int(mf.size * 1.2) + gap
-	y = max(int((ctx.height - total) / 2), ctx.scaled(120))
+	y = max(int((ctx.content_height - total) / 2), ctx.scaled(120))
 
 	if marker:
 		_draw_tracked(
@@ -354,10 +394,10 @@ def bullet_slide(ctx: SlideContext, title: str, bullets: list[str]) -> Image.Ima
 	tf = tl = None
 	total = sum(block_height(w, bf) + spacing for w in wrapped)
 	if title:
-		tf, tl = fit_text(d, title, _BOLD, box, ctx.scaled(190), start=ctx.scaled(60))
+		tf, tl = fit_text(d, title, _BOLD, box, ctx.fitted(190), start=ctx.scaled(60))
 		total += block_height(tl, tf) + ctx.scaled(52)
 
-	y = max(int((ctx.height - total) / 2), ctx.scaled(200))
+	y = max(int((ctx.content_height - total) / 2), ctx.scaled(200))
 	if tf is not None:
 		y = draw_lines(d, tl, tf, m, y, FG) + ctx.scaled(52)
 
@@ -378,7 +418,7 @@ def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Imag
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.scaled(430), start=ctx.scaled(132))
+	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.fitted(430), start=ctx.scaled(132))
 	cf = regular(ctx.scaled(34))
 	cap_lines = wrap(d, caption, cf, int(box * 0.8)) if caption else []
 
@@ -386,7 +426,7 @@ def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Imag
 	total = block_height(lines, font, 1.2) + ctx.scaled(40) + rule_h
 	if cap_lines:
 		total += ctx.scaled(34) + block_height(cap_lines, cf, 1.35)
-	y = max(int((ctx.height - total) / 2), ctx.scaled(150))
+	y = max(int((ctx.content_height - total) / 2), ctx.scaled(150))
 
 	for line in lines:
 		w = d.textlength(line, font=font)
@@ -431,14 +471,14 @@ def figure_slide(
 	top = ctx.scaled(198) if title else ctx.scaled(140)
 	if title:
 		tf, lines = fit_text(
-			d, title, _BOLD, ctx.width - 2 * m, ctx.scaled(100), start=ctx.scaled(46)
+			d, title, _BOLD, ctx.width - 2 * m, ctx.fitted(100), start=ctx.scaled(46)
 		)
 		draw_lines(d, lines, tf, m, ctx.scaled(116), FG)
 
 	# Reserve room under the card for a caption line when there is one.
 	cf = regular(ctx.scaled(28))
 	cap = truncate(d, caption, cf, ctx.width - 2 * m) if caption else ""
-	bottom = ctx.height - (ctx.scaled(186) if cap else ctx.scaled(140))
+	bottom = ctx.content_height - (ctx.scaled(186) if cap else ctx.scaled(140))
 
 	card = [m, top, ctx.width - m, bottom]
 	d.rounded_rectangle(

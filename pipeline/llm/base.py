@@ -21,6 +21,18 @@ class MissingAPIKey(LLMError):
 	pass
 
 
+class ProviderUnavailable(LLMError):
+	"""The account cannot make calls at all - no credit, bad key, no permission.
+
+	Distinguished from a plain `LLMError` because the difference decides what a
+	stage should do about it. One failed call is worth retrying and often worth
+	degrading around; an account that cannot serve *any* request will fail every
+	remaining call in the run, and continuing past it spends money on the stages
+	that do not need an API. On 2026-08-19 that cost a narration bill and a
+	render for an episode with no title (DECISIONS.md, the 2026-08-19 run).
+	"""
+
+
 @dataclass(slots=True)
 class LLMResponse:
 	text: str

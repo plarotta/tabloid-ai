@@ -14,3 +14,7 @@ htmlcov/
 node_modules/
 
 demos/out/
+
+# manim's default output directory. `animate.py` renders into a temp dir, but
+# running a scene by hand from the repo root drops one here.
+media/

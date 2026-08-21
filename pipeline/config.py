@@ -87,22 +87,45 @@ class ExtractConfig(StrictModel):
 class ScriptConfig(StrictModel):
 	stage_model: str = "script"
 	max_concurrency: int = 3
-	# Spec Stage 6: 60-90s per paper segment, ~150 wpm narration budget.
-	target_segment_seconds: int = 75
-	# Hard ceiling on scenes per segment, enforced in code. The prompt has asked
-	# for 5-8 since v1 and the 2026-08-12 run came back with 8, 7 and 7 at ~110s
-	# each against a 75s target - stating a budget is not the same as holding one.
-	max_scenes_per_segment: int = 6
-	# Log an error when a segment's narration exceeds its word budget by more
-	# than this. Words cannot be trimmed safely in code, so this is a signal for
-	# tuning the prompt rather than an automatic fix.
+	# Spec Stage 6: 60-90s per paper segment, ~150 wpm narration budget. 75 -> 70
+	# on measurement: the 2026-08-19 segments hit their 75s budget exactly and
+	# still ran 253s, because that budget is denominated in words at 150 wpm and
+	# the voice reads at 140-147. 70 puts the episode at 4:46 (D34).
+	target_segment_seconds: int = 70
+	# Scenes are pace, not length: a scene is a slide, and the picture changes
+	# only when the scene does. Episode one ran 7, 7 and 8 scenes at 12.1s a
+	# slide; v3's cap of 6 stretched that to 13.9s without saving any runtime,
+	# because the words stayed. Length is held by the word budget instead (D34).
+	min_scenes_per_segment: int = 7
+	# Hard ceiling, enforced in code - the prompt asked for 5-8 from v1 and the
+	# 2026-08-12 run came back over budget anyway. Stating a budget is not the
+	# same as holding one.
+	max_scenes_per_segment: int = 8
+	# Over budget by more than this and the part is sent back for a second,
+	# shorter draft (prompts/condense/). Tighter than word_budget_tolerance
+	# because it triggers a fix rather than a complaint - one extra Sonnet call
+	# per over-long part, about a cent.
+	condense_tolerance: float = 0.10
+	# How many tightening passes a single part gets. One pass took the worst
+	# 2026-08-13 segment from 279 words to 242 against a budget of 175 - short of
+	# the target but clearly still moving, and the second pass is another cent.
+	condense_max_passes: int = 2
+	# Log an error when narration is still over budget by more than this *after*
+	# the condense pass. Code never cuts words itself, so what survives both is a
+	# signal for tuning the prompt.
 	word_budget_tolerance: float = 0.25
 	# The cold open names the series and the papers' shared thread before teasing
 	# them, so it needs more room than the three flat hooks it used to be (D30).
-	cold_open_seconds: int = 18
+	# 18 was never realistic for those beats - the 2026-08-13 open ran to 34s
+	# against it. 21 is what the structure actually costs when each beat is held
+	# to one scene, and the prompt now fixes the scene count to match (D34).
+	cold_open_seconds: int = 21
 	# One bridge line before each paper, including the first. Long enough to land
 	# a sentence, short enough that it reads as punctuation rather than a scene.
 	transition_seconds: int = 5
+	# Two scenes: what the thread adds up to, then the sign-off. Was fixed in the
+	# prompt text as "8-12 seconds"; here so the wrapper budget can be checked.
+	outro_seconds: int = 10
 	words_per_minute: int = 150
 
 
@@ -124,6 +147,10 @@ class TTSConfig(StrictModel):
 	# changes. Lives in the audio file rather than the render timeline - see
 	# `append_silence` in stages/voice.py.
 	scene_gap_seconds: float = 0.35
+	# The beat after a bridge line, before the next paper opens. Longer than a
+	# scene gap because the bridge is now a bare signpost - the pause is what
+	# separates two papers, where a written sentence used to (D35).
+	bridge_pause_seconds: float = 1.0
 	# Speaking rate for the local engine only. `say` defaults to ~175 wpm, which
 	# reads as rushed; hosted engines set their own pace and ignore this.
 	rate: int | None = 165
@@ -146,6 +173,24 @@ class RenderConfig(StrictModel):
 	# a filtergraph and a stream copy are mutually exclusive; 0 restores the
 	# stream-copy concat. See DECISIONS.md D26.
 	episode_crossfade_seconds: float = 0.6
+	# Burn the narration into the frame as captions. Built, measured and then
+	# turned off on the owner's review - the look, not the mechanism, is what
+	# was rejected. Costs a reserved band at the bottom of every slide. D33.
+	captions: bool = False
+	# Ken Burns: a slow zoom on each slide. Off for the same reason. Free in API
+	# terms but not in CPU - every frame becomes distinct, so the encoder can no
+	# longer coast through a static slide. D33.
+	motion: bool = False
+	# Animated callouts (D36). A `result_callout` the model supplied comparison
+	# parameters for is rendered by manim instead of Pillow. Needs the `manim`
+	# extra; without it, and on any render failure or timeout, the scene falls
+	# back to the static callout. Needs `crossfade_seconds > 0` for the same
+	# reason motion does - the hard-cut path concatenates images and has nowhere
+	# to put a clip.
+	animated_callouts: bool = True
+	# Per clip. A template takes ~3s at 1080p30; this is the point at which a
+	# scene is not worth waiting for and the still is used instead.
+	animate_timeout_seconds: int = 120
 	# Off by default: no licensed track could be sourced, and the synthesised
 	# fallback reads as hum once it is audible. Drop a track at assets/music/ and
 	# enable this. See DECISIONS.md D21.

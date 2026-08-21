@@ -13,6 +13,16 @@ from the *same* list of measured durations:
 Because both derive from one source of truth, drift cannot accumulate across a
 segment the way it does when a still is held for an estimated time.
 
+Two things sit on top of that timeline (D33), both driven by the same measured
+durations so neither can desync:
+
+  - **Ken Burns.** Each still is oversampled and slowly zoomed, so a slide that
+    holds for fifteen seconds is not a frozen frame. Per-input, which means it
+    needs the one-input-per-slide path the cross-dissolve already uses.
+  - **Captions.** A separate concat of transparent PNGs, overlaid *after* the
+    slides are faded and zoomed - so a caption never dissolves with the slide
+    under it and never drifts with the zoom.
+
 `ffmpeg` is required and its absence is reported as a clear StageError rather
 than a traceback.
 """
@@ -23,16 +33,42 @@ import json
 import logging
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
+from ..render import animate, captions
+from ..render.captions import Cue
 from ..render.slides import BG as SLIDE_BG
 from ..render.slides import SlideContext, render_visual
 from ..schemas import RenderedSegment, RenderResult, SceneManifest, SegmentAudio
 from ..stage import Stage, StageError
 
 log = logging.getLogger(__name__)
+
+# How far each slide type zooms over its own duration. Figures earn the most:
+# they are the one thing on screen a viewer actually studies, and a still
+# diagram is where the "AI slideshow" read is strongest. A transition card gets
+# none - it is a punctuation beat, and its tinted ground already marks a change.
+MOTION_AMPLITUDE = {"figure": 0.07, "transition": 0.0}
+MOTION_DEFAULT = 0.03
+
+
+@dataclass(slots=True)
+class Slide:
+	"""One composed still, plus what Stage 8 needs to know about it downstream.
+
+	`visual_type` chooses the zoom amplitude; `narration` is what the captions
+	for this slide's span are cut from.
+	"""
+
+	path: Path
+	visual_type: str
+	narration: str
+	# True when `path` is an mp4 rather than a PNG. A clip is fed to ffmpeg
+	# without `-loop`, and never takes the Ken Burns move - it is already moving.
+	animated: bool = False
 
 
 def have_ffmpeg() -> bool:
@@ -89,10 +125,64 @@ class RenderStage(Stage):
 		label: str,
 		eyebrow: str = "",
 		paper_index: int | None = None,
-	) -> list[Path]:
-		"""One PNG per narrated scene, in narration order."""
-		cfg = self.config.render
+		hold: float = 0.0,
+		animate_ok: bool = False,
+	) -> list[Slide]:
+		"""One frame per narrated scene, in narration order.
+
+		Usually a PNG. A `result_callout` the model supplied comparison parameters
+		for becomes an mp4 instead, when `render.animated_callouts` is on and manim
+		is installed - and falls back to the PNG on any failure, so this returns a
+		renderable slide for every scene either way (D36).
+
+		`hold` is the cross-dissolve overlap the caller will add on top of each
+		scene's measured duration. A clip has to cover it, because unlike a still
+		it cannot simply be held longer.
+		"""
+		ctx = self._slide_context(manifest, label, eyebrow, paper_index, len(audio.scenes))
 		by_id = {s.id: s for s in manifest.scenes}
+		cfg = self.config.render
+		animating = cfg.animated_callouts and animate_ok
+
+		out_dir.mkdir(parents=True, exist_ok=True)
+		slides = []
+		for i, clip in enumerate(audio.scenes):
+			scene = by_id.get(clip.scene_id)
+			if scene is None:
+				log.warning("%s: audio for unknown scene %s; skipping", label, clip.scene_id)
+				continue
+			ctx.scene_index = i  # drives the progress bar
+
+			if animating and animate.wants_animation(scene.visual):
+				moving = animate.render_clip(
+					scene.visual,
+					ctx,
+					clip.duration_seconds + hold,
+					out_dir,
+					f"{i:03d}_{scene.id}",
+					fps=cfg.fps,
+					timeout=cfg.animate_timeout_seconds,
+				)
+				if moving is not None:
+					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))
+					continue
+
+			img = render_visual(ctx, scene.visual, scene.id)
+			path = out_dir / f"{i:03d}_{scene.id}.png"
+			img.save(path, "PNG")
+			slides.append(Slide(path, scene.visual.type, scene.narration))
+		return slides
+
+	def _slide_context(
+		self,
+		manifest: SceneManifest,
+		label: str,
+		eyebrow: str = "",
+		paper_index: int | None = None,
+		scene_total: int = 0,
+	) -> SlideContext:
+		"""The frame every slide in one part is composed against."""
+		cfg = self.config.render
 		figures_dir = self.paths.enriched_dir / manifest.arxiv_id.replace("/", "_") / "figures"
 		ctx = SlideContext(
 			width=cfg.width,
@@ -101,23 +191,126 @@ class RenderStage(Stage):
 			figures_dir=figures_dir if figures_dir.exists() else None,
 			segment_label=label,
 			eyebrow=eyebrow,
-			scene_total=len(audio.scenes),
+			scene_total=scene_total,
 			paper_index=paper_index,
 		)
+		# Reserving the band is what keeps a caption off the arXiv attribution
+		# and the progress bar; the slides lift both out of the way themselves.
+		if cfg.captions:
+			ctx.caption_band = captions.band_height(ctx)
+		return ctx
 
+	def _amplitude(self, visual_type: str, animated: bool = False) -> float:
+		"""How far this slide type zooms over its own duration, or 0 to hold still.
+
+		An animated callout never zooms: it is already moving, and a Ken Burns
+		push on top of a growing bar reads as a wobble rather than as motion.
+		"""
+		if animated or not self.config.render.motion:
+			return 0.0
+		return MOTION_AMPLITUDE.get(visual_type, MOTION_DEFAULT)
+
+	def _video_chain(self, visual_type: str, frames: int, animated: bool = False) -> str:
+		"""The per-input filter chain: fit to frame, then optionally zoom.
+
+		Without motion this is the plain scale-and-pad the stage has always used.
+		With it, the still is first oversampled by the zoom amplitude, so the
+		tightest crop is still at native resolution rather than an upscale -
+		the whole move stays sharp. Frame count is untouched (`d=1` emits one
+		output frame per input frame), which is what keeps the xfade offsets and
+		therefore the A/V sync correct.
+		"""
+		cfg = self.config.render
+		ground = "".join(f"{c:02x}" for c in SLIDE_BG)
+		w, h = cfg.width, cfg.height
+
+		amp = self._amplitude(visual_type, animated)
+		if amp <= 0 or frames < 2:
+			return (
+				f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+				f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x{ground},"
+				f"fps={cfg.fps},format=yuv420p"
+			)
+
+		# libx264 needs even dimensions, and so does the yuv420p chroma plane.
+		ow, oh = (int(w * (1 + amp)) // 2) * 2, (int(h * (1 + amp)) // 2) * 2
+		return (
+			f"scale={ow}:{oh}:force_original_aspect_ratio=decrease,"
+			f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:color=0x{ground},"
+			f"fps={cfg.fps},"
+			f"zoompan=z='min(1+{amp:.4f}*on/{frames - 1},{1 + amp:.4f})':d=1:"
+			f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps={cfg.fps},"
+			f"format=yuv420p"
+		)
+
+	def _cues(self, slides: list[Slide], durations: list[float]) -> list[Cue]:
+		"""Caption cues for a whole part, on the part's own timeline.
+
+		Built from the *final* slide and duration lists, after any truncation, so
+		a dropped scene shifts the captions with it rather than leaving them a
+		scene ahead for the rest of the part.
+		"""
+		cues: list[Cue] = []
+		at = 0.0
+		for slide, duration in zip(slides, durations, strict=True):
+			cues.extend(captions.cues_for(slide.narration, duration, start=at))
+			at += duration
+		return cues
+
+	def _caption_track(self, ctx: SlideContext, cues: list[Cue], total: float, work: Path) -> Path:
+		"""A concat list of transparent caption frames covering `total` seconds.
+
+		Gaps - a scene with no narration, or the tail of a rounded division - are
+		filled with a clear frame rather than left out, because the concat
+		demuxer has no notion of a hole and would simply hold the previous
+		caption over the silence.
+		"""
+		out_dir = work / "captions"
 		out_dir.mkdir(parents=True, exist_ok=True)
-		paths = []
-		for i, clip in enumerate(audio.scenes):
-			scene = by_id.get(clip.scene_id)
-			if scene is None:
-				log.warning("%s: audio for unknown scene %s; skipping", label, clip.scene_id)
-				continue
-			ctx.scene_index = i  # drives the progress bar
-			img = render_visual(ctx, scene.visual, scene.id)
-			path = out_dir / f"{i:03d}_{scene.id}.png"
-			img.save(path, "PNG")
+		blank = out_dir / "blank.png"
+		captions.caption_image(ctx, "").save(blank, "PNG")
+
+		paths: list[Path] = []
+		durations: list[float] = []
+		at = 0.0
+		for i, cue in enumerate(cues):
+			if cue.start - at > 1e-3:
+				paths.append(blank)
+				durations.append(cue.start - at)
+			path = out_dir / f"cue_{i:03d}.png"
+			captions.caption_image(ctx, cue.text).save(path, "PNG")
 			paths.append(path)
-		return paths
+			durations.append(max(cue.seconds, 1.0 / self.config.render.fps))
+			at = cue.end
+		if total - at > 1e-3 or not paths:
+			paths.append(blank)
+			durations.append(max(total - at, 1.0 / self.config.render.fps))
+
+		listing = work / "captions.txt"
+		listing.write_text(concat_list(paths, durations), encoding="utf-8")
+		return listing
+
+	def _overlay_captions(
+		self, graph: str, video_label: str, caption_index: int
+	) -> tuple[str, str]:
+		"""Composite the caption track over a finished video chain.
+
+		Last in the graph on purpose. Overlaying *before* the cross-dissolve
+		would fade the captions with the slides, so every scene change would take
+		a caption out through a half-second dip; overlaying before the zoom would
+		drag them across the frame with it.
+
+		`eof_action=pass` because the caption track is built from rounded
+		durations and can land a frame short of the video it covers - the last
+		frame of a part is not worth failing a render over.
+		"""
+		fps = self.config.render.fps
+		graph = (
+			f"{graph};[{caption_index}:v]fps={fps},format=rgba[cap];"
+			f"[{video_label}][cap]overlay=0:0:eof_action=pass:format=auto,"
+			f"format=yuv420p[vout]"
+		)
+		return graph, "vout"
 
 	def _xfade_filter(self, n: int, durations: list[float], fade: float) -> tuple[str, str]:
 		"""Chain n inputs with cross-dissolves. Returns (filtergraph, out_label).
@@ -261,7 +454,24 @@ class RenderStage(Stage):
 			log.error("%s: no audio files found; cannot render", label)
 			return None
 
-		slides = self._slides_for(manifest, audio, work / "slides", label, eyebrow, paper_index)
+		# Whether this part will cross-dissolve has to be known *before* the slides
+		# are made: a clip has to be rendered long enough to cover the overlap,
+		# where a still is simply held for longer. Decided off the audio, which is
+		# what both the fade and the timeline are measured against.
+		fade = cfg.crossfade_seconds
+		will_crossfade = (
+			fade > 0 and len(clips) > 1 and min(c.duration_seconds for c in clips) > fade * 2
+		)
+		slides = self._slides_for(
+			manifest,
+			audio,
+			work / "slides",
+			label,
+			eyebrow,
+			paper_index,
+			hold=fade if will_crossfade else 0.0,
+			animate_ok=will_crossfade,
+		)
 		if not slides:
 			# Every scene id in the audio was absent from the manifest, so there is
 			# nothing to show. ffmpeg would fail on an empty input list.
@@ -331,26 +541,54 @@ class RenderStage(Stage):
 
 		# 3. Video track, synced to the measured durations.
 		out = out_root / f"{out_name or f'segment_{label}'}.mp4"
-		# Letterbox bars must match the slide ground, or a non-16:9 render frames
-		# every slide in a colour the visual system never uses.
-		ground = "".join(f"{c:02x}" for c in SLIDE_BG)
-		scale = (
-			f"scale={cfg.width}:{cfg.height}:force_original_aspect_ratio=decrease,"
-			f"pad={cfg.width}:{cfg.height}:(ow-iw)/2:(oh-ih)/2:color=0x{ground},"
-			f"fps={cfg.fps},format=yuv420p"
-		)
-		fade = cfg.crossfade_seconds
+		crossfading = fade > 0 and len(slides) > 1 and min(durations) > fade * 2
 
-		if fade > 0 and len(slides) > 1 and min(durations) > fade * 2:
+		cues = self._cues(slides, durations) if cfg.captions else []
+		caption_list = (
+			self._caption_track(
+				self._slide_context(manifest, label, eyebrow, paper_index, len(slides)),
+				cues,
+				total,
+				work,
+			)
+			if cues
+			else None
+		)
+
+		# The zoom is a per-input filter and the hard-cut path has one input for
+		# the whole part, so there is nowhere to hang it. Only worth saying when
+		# something would actually have moved: a bridge is a lone transition
+		# card, which is deliberately still and cannot cross-dissolve anyway.
+		if not crossfading and any(self._amplitude(s.visual_type, s.animated) > 0 for s in slides):
+			log.warning(
+				"%s: the Ken Burns move needs the per-slide input path that the "
+				"cross-dissolve uses; rendering this part still",
+				label,
+			)
+
+		if crossfading:
 			# Cross-dissolve. Each still is held for its scene *plus* the fade, and
 			# every xfade consumes exactly that overlap, so runtime is preserved.
 			args: list[str] = []
-			for path, dur in zip(slides, durations, strict=True):
-				args += ["-loop", "1", "-t", f"{dur + fade:.4f}", "-i", str(path)]
+			for slide, dur in zip(slides, durations, strict=True):
+				# A still is looped to length; a clip already runs that long and is
+				# trimmed to it. `-t` before `-i` bounds the input either way, so a
+				# clip that came back a frame long cannot shift the timeline.
+				if not slide.animated:
+					args += ["-loop", "1"]
+				args += ["-t", f"{dur + fade:.4f}", "-i", str(slide.path)]
 			args += ["-i", str(final_audio)]
 			chain, last = self._xfade_filter(len(slides), durations, fade)
-			pre = ";".join(f"[{i}:v]{scale}[v{i}]" for i in range(len(slides)))
+			pre = ";".join(
+				f"[{i}:v]"
+				f"{self._video_chain(s.visual_type, round((d + fade) * cfg.fps), s.animated)}"
+				f"[v{i}]"
+				for i, (s, d) in enumerate(zip(slides, durations, strict=True))
+			)
 			graph = f"{pre};{chain}" if chain else pre
+			if caption_list is not None:
+				args += ["-f", "concat", "-safe", "0", "-i", str(caption_list)]
+				graph, last = self._overlay_captions(graph, last, len(slides) + 1)
 			run_ffmpeg(
 				[
 					*args,
@@ -383,18 +621,37 @@ class RenderStage(Stage):
 			)
 		else:
 			# Hard cuts: the concat demuxer holds each slide for its own duration.
+			# Only stills reach here - `animate_ok` is false whenever this path is
+			# taken, because a concat script of images has nowhere to put an mp4.
 			video_list = work / "video.txt"
-			video_list.write_text(concat_list(slides, durations), encoding="utf-8")
+			video_list.write_text(
+				concat_list([s.path for s in slides], durations), encoding="utf-8"
+			)
+			args = [
+				"-f",
+				"concat",
+				"-safe",
+				"0",
+				"-i",
+				str(video_list),
+				"-i",
+				str(final_audio),
+			]
+			# frames=0 selects the still chain: one concat stream carries every
+			# visual type at once, so there is no per-slide zoom to apply.
+			graph, last = f"[0:v]{self._video_chain('', 0)}[vbase]", "vbase"
+			if caption_list is not None:
+				args += ["-f", "concat", "-safe", "0", "-i", str(caption_list)]
+				graph, last = self._overlay_captions(graph, last, 2)
 			run_ffmpeg(
 				[
-					"-f",
-					"concat",
-					"-safe",
-					"0",
-					"-i",
-					str(video_list),
-					"-i",
-					str(final_audio),
+					*args,
+					"-filter_complex",
+					graph,
+					"-map",
+					f"[{last}]",
+					"-map",
+					"1:a",
 					"-c:v",
 					"libx264",
 					"-preset",
@@ -405,8 +662,6 @@ class RenderStage(Stage):
 					"yuv420p",
 					"-r",
 					str(cfg.fps),
-					"-vf",
-					scale,
 					"-c:a",
 					"copy",
 					"-shortest",
@@ -416,6 +671,8 @@ class RenderStage(Stage):
 				],
 				f"muxing the {label} segment",
 			)
+		if cues:
+			log.info("  %s: %s caption cue(s)", label, len(cues))
 		return out, total
 
 	def _stitch_episode(self, parts: list[tuple[Path, float]], out: Path, work: Path) -> None:

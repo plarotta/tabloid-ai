@@ -17,6 +17,7 @@ from pipeline.paths import write_json
 from pipeline.schemas import (
 	EnrichedPaper,
 	EnrichResult,
+	EpisodeMetadata,
 	ExtractResult,
 	FigureAsset,
 	PaperDigest,
@@ -24,6 +25,7 @@ from pipeline.schemas import (
 	RankedPaper,
 	RankResult,
 	SceneManifest,
+	ScriptResult,
 	SignalsModel,
 )
 from pipeline.stage import StageError
@@ -495,3 +497,453 @@ def test_verification_can_be_disabled(ctx, monkeypatch):
 	)
 	patch_llm(monkeypatch, ScriptedLLM([payload]))
 	assert len(ExtractStage(ctx).run().digests[0].headline_results) == 1
+
+
+# --- an account that cannot make calls is not a call that failed --------------
+
+
+class DeadAccountLLM(ScriptedLLM):
+	"""The exact shape of the 2026-08-19 failure: a 400 whose body says the
+	credit balance is gone, on every call."""
+
+	def __init__(self, message="Error code: 400 - Your credit balance is too low"):
+		super().__init__(["{}"])
+		self.message = message
+
+	def complete(self, prompt, system=None, max_tokens=4096, temperature=0.0):
+		self.calls += 1
+		raise RuntimeError(self.message)
+
+
+def test_a_credit_failure_is_recognised_and_an_ordinary_one_is_not():
+	from pipeline.llm import is_account_failure
+
+	assert is_account_failure(RuntimeError("Error code: 400 - Your credit balance is too low"))
+	assert is_account_failure(RuntimeError("invalid api key"))
+	assert not is_account_failure(RuntimeError("Connection reset by peer"))
+	assert not is_account_failure(ValueError("expected an object, got list"))
+
+
+def test_a_credit_failure_is_not_retried(ctx):
+	"""Three attempts to be told the same thing, then a degraded result, is how
+	a dead account reached Stage 7 and spent a narration bill."""
+	from pipeline.llm import ProviderUnavailable
+
+	fake = DeadAccountLLM()
+	client = MeteredClient(fake, ctx.tracker, "script", max_retries=3)
+	with pytest.raises(ProviderUnavailable):
+		client.complete("anything")
+	assert fake.calls == 1, "no retries against an account-level failure"
+
+
+def test_the_wrapper_does_not_degrade_when_the_account_is_dead(ctx, monkeypatch):
+	"""A bad JSON parse costs the wrapper and nothing else (D18). No credit is a
+	different thing: every later call fails too, so the stage must stop before
+	Stage 7 narrates an episode that has no title."""
+	from pipeline.llm import ProviderUnavailable
+
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+
+	class SegmentsThenNoCredit(ScriptedLLM):
+		def complete(self, prompt, system=None, max_tokens=4096, temperature=0.0):
+			self.calls += 1
+			if self.calls == 1:
+				return super().complete(prompt, system, max_tokens, temperature)
+			raise RuntimeError("Error code: 400 - Your credit balance is too low")
+
+	patch_llm(monkeypatch, SegmentsThenNoCredit([script_payload("2608.00001")]))
+	with pytest.raises(ProviderUnavailable):
+		ScriptStage(ctx).run()
+	assert not (ctx.paths.stage_dir("script") / "script.json").exists()
+
+
+# --- the condense pass (words, unlike scenes, are cut by a model not by code) -
+
+
+def _long(n_scenes=3, words_each=40):
+	return SceneManifest.model_validate(
+		{
+			"arxiv_id": "2608.00001",
+			"scenes": [
+				{
+					"id": f"s{i + 1}",
+					"narration": " ".join(["word"] * words_each),
+					"visual": {"type": "figure", "figure_file": "figures/fig01.png"},
+					"est_seconds": 16,
+				}
+				for i in range(n_scenes)
+			],
+		}
+	)
+
+
+def _shorter(scene_ids, words_each=10):
+	return {
+		"arxiv_id": "2608.00001",
+		"scenes": [
+			{"id": i, "narration": " ".join(["tight"] * words_each), "est_seconds": 4}
+			for i in scene_ids
+		],
+	}
+
+
+def _condense(ctx, manifest, target_words, fake):
+	return ScriptStage(ctx)._condense(
+		MeteredClient(fake, ctx.tracker, "script"), manifest, target_words
+	)
+
+
+def test_a_part_within_budget_is_never_sent_back(ctx):
+	"""The pass costs a call, so it only runs on something actually over."""
+	fake = ScriptedLLM([_shorter(["s1", "s2", "s3"])])
+	out = _condense(ctx, _long(words_each=10), 100, fake)
+	assert fake.calls == 0
+	assert out.scenes[0].narration.startswith("word")
+
+
+def test_a_tightened_part_keeps_its_visuals(ctx):
+	"""Only narration is rewritten - the slides were already chosen, and the
+	rewrite is not asked for them."""
+	fake = ScriptedLLM([_shorter(["s1", "s2", "s3"])])
+	out = _condense(ctx, _long(), 60, fake)
+	assert sum(len(s.narration.split()) for s in out.scenes) == 30
+	assert [s.visual.figure_file for s in out.scenes] == ["figures/fig01.png"] * 3
+	assert out.scenes[0].est_seconds == pytest.approx(10 / 150 * 60)
+
+
+def test_a_tightened_scene_is_re_checked_for_leakage(ctx, caplog):
+	"""The leakage check ran over the draft; the rewrite is different text."""
+	import logging
+
+	bad = {
+		"arxiv_id": "2608.00001",
+		"scenes": [
+			{"id": f"s{i}", "narration": "the loss is $\\alpha$ here", "est_seconds": 2}
+			for i in (1, 2, 3)
+		],
+	}
+	with caplog.at_level(logging.WARNING):
+		_condense(ctx, _long(), 60, ScriptedLLM([bad]))
+	assert "tightened narration contains LaTeX" in caplog.text
+
+
+def test_a_rewrite_that_drops_a_scene_is_rejected(ctx):
+	"""Losing a scene would take a beat of the argument with it, so the long
+	version stands and the word budget is reported instead."""
+	fake = ScriptedLLM([_shorter(["s1", "s3"])])
+	out = _condense(ctx, _long(), 60, fake)
+	assert len(out.scenes) == 3
+	assert sum(len(s.narration.split()) for s in out.scenes) == 120
+
+
+def test_a_rewrite_that_is_not_shorter_is_rejected(ctx):
+	fake = ScriptedLLM([_shorter(["s1", "s2", "s3"], words_each=50)])
+	out = _condense(ctx, _long(), 60, fake)
+	assert sum(len(s.narration.split()) for s in out.scenes) == 120
+
+
+def test_an_unparseable_rewrite_leaves_the_segment_alone(ctx):
+	"""A failed tightening is a long segment, not a lost one."""
+	fake = ScriptedLLM(["not json"])
+	out = _condense(ctx, _long(), 60, fake)
+	assert len(out.scenes) == 3
+
+
+def test_tightening_repeats_while_it_is_still_making_progress(ctx):
+	"""One pass took the worst real segment from 279 words to 242 against a
+	budget of 175 - shorter, but not short enough to stop."""
+	fake = ScriptedLLM(
+		[_shorter(["s1", "s2", "s3"], words_each=40), _shorter(["s1", "s2", "s3"], words_each=20)]
+	)
+	out = _condense(ctx, _long(words_each=50), 60, fake)
+	assert fake.calls == 2
+	assert sum(len(s.narration.split()) for s in out.scenes) == 60
+
+
+def test_a_rejected_pass_is_not_retried(ctx):
+	"""A refusal is not progress, so paying for the same one twice is waste."""
+	fake = ScriptedLLM(["not json"])
+	_condense(ctx, _long(words_each=50), 60, fake)
+	assert fake.calls == 1
+
+
+def test_tightening_stops_once_the_part_is_inside_its_budget(ctx):
+	fake = ScriptedLLM([_shorter(["s1", "s2", "s3"], words_each=10)])
+	out = _condense(ctx, _long(words_each=50), 60, fake)
+	assert fake.calls == 1
+	assert sum(len(s.narration.split()) for s in out.scenes) == 30
+
+
+def test_the_cap_is_applied_before_the_rewrite_is_paid_for(ctx):
+	"""Condensing scenes that are about to be dropped is money for nothing."""
+	ctx.config.script.max_scenes_per_segment = 3
+	fake = ScriptedLLM([_shorter(["s1", "s4", "s5"])])
+	client = MeteredClient(fake, ctx.tracker, "script")
+	out = ScriptStage(ctx)._enforce_budget(_long(n_scenes=5), 60, client)
+	assert [s.id for s in out.scenes] == ["s1", "s4", "s5"]
+	assert sum(len(s.narration.split()) for s in out.scenes) == 30
+
+
+# --- projecting the finished runtime from the words -------------------------
+
+
+@pytest.mark.parametrize(
+	("words", "clips", "measured"),
+	[
+		(689, 27, 291.5),  # 2026-08-07, the fastest read of the four
+		(750, 28, 315.6),  # 2026-08-13
+		(570, 24, 253.2),  # 2026-08-19, the slowest
+	],
+)
+def test_the_runtime_projection_tracks_the_shipped_episodes(ctx, words, clips, measured):
+	"""Calibration, not arithmetic. The read rate moves with how long the words
+	are - 2.33 to 2.45 spoken words a second across these three - so the
+	projection is only ever good to about 5%. If it drifts past that, the
+	constant is stale and every length decision made from it is too."""
+	per_clip, extra = divmod(words, clips)
+	counts = [per_clip + 1] * extra + [per_clip] * (clips - extra)
+	it = iter(counts)
+
+	def m(arxiv_id, n):
+		return SceneManifest.model_validate(
+			{
+				"arxiv_id": arxiv_id,
+				"scenes": [
+					{
+						"id": f"s{i}",
+						"narration": " ".join(["word"] * next(it)),
+						"visual": {"type": "title_card", "title": "T"},
+						"est_seconds": 10,
+					}
+					for i in range(n)
+				],
+			}
+		)
+
+	result = ScriptResult(
+		generated_at=datetime.now(UTC),
+		segments=[m(f"2608.0000{i}", clips // 3) for i in (1, 2, 3)],
+		episode=EpisodeMetadata(
+			title="t",
+			description="d",
+			thumbnail_text_options=[],
+			cold_open=m("episode", clips - 3 * (clips // 3)),
+		),
+	)
+	ctx.config.tts.scene_gap_seconds = 0.35
+	assert ScriptStage(ctx)._projected_seconds(result) == pytest.approx(measured, rel=0.05)
+
+
+# --- the wrapper's own budget ------------------------------------------------
+
+
+def _wrapper(ctx, cold_words=52, trans_words=12, outro_words=25, n=1):
+	episode = EpisodeMetadata.model_validate(episode_payload([bridge("2608.00001")]))
+	ScriptStage(ctx)._report_wrapper_budget(episode, cold_words, trans_words, outro_words)
+	return episode
+
+
+def test_a_wrapper_within_budget_is_quiet(ctx, caplog):
+	import logging
+
+	with caplog.at_level(logging.ERROR):
+		_wrapper(ctx)
+	assert not caplog.records
+
+
+def test_an_overlong_wrapper_names_the_part_that_is_over(ctx, caplog):
+	"""The 2026-08-13 cold open ran 73 words against 45 and nothing said so until
+	the finished episode came out at 5:16 (D34)."""
+	import logging
+
+	with caplog.at_level(logging.ERROR):
+		_wrapper(ctx, cold_words=1)
+	assert "cold open is 4 words against a 1 budget" in caplog.text
+
+
+def test_wrapper_budget_survives_a_dropped_bridge(ctx, caplog):
+	"""A bridge can be dropped for being unparseable, so the budget is measured
+	against the transitions that survived, not the number that were asked for."""
+	import logging
+
+	episode = EpisodeMetadata.model_validate(episode_payload([]))
+	with caplog.at_level(logging.INFO):
+		ScriptStage(ctx)._report_wrapper_budget(episode, 52, 12, 25)
+	assert "transitions" not in caplog.text
+
+
+# --- the live prompts, rendered with what the stage actually passes -----------
+
+
+def test_the_live_script_prompt_has_every_placeholder_the_stage_fills(ctx, monkeypatch):
+	"""A placeholder added to a prompt without being wired into Stage 6 raises at
+	render time - which is three paid stages into a run."""
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+	patch_llm(monkeypatch, ScriptedLLM([script_payload("2608.00001"), episode_payload()]))
+
+	# load_prompt() is unpatched here, so this renders prompts/script/ and
+	# prompts/episode/ at their highest version - the ones a real run uses.
+	result = ScriptStage(ctx).run()
+	assert result.segments and result.episode.title
+
+
+# --- animated callouts: the numbers must be the paper's ----------------------
+
+
+def _with_comparison(**over):
+	params = dict(
+		template="two_bar",
+		label_a="Diffusion",
+		value_a=200,
+		label_b="Chinchilla",
+		value_b=20,
+		note="10x",
+	)
+	params.update(over)
+	return SceneManifest.model_validate(
+		{
+			"arxiv_id": "2608.00001",
+			"scenes": [
+				{
+					"id": "s1",
+					"narration": "Two hundred tokens per parameter, ten times the rule of twenty.",
+					"visual": {"type": "result_callout", "highlight": "200", "comparison": params},
+					"est_seconds": 9,
+				}
+			],
+		}
+	)
+
+
+def test_a_comparison_backed_by_the_digest_survives(ctx):
+	digest = "compute-optimal at 200 image tokens per parameter, against Chinchilla's 20"
+	out = ScriptStage(ctx)._check_comparisons(_with_comparison(), digest)
+	assert out.scenes[0].visual.comparison is not None
+
+
+def test_an_invented_baseline_is_dropped_to_a_static_callout(ctx, caplog):
+	"""The chart is the most credible thing on screen - a bar at a tenth the
+	length of another is the claim - so a baseline the digest never stated is
+	worse here than anywhere else (D36)."""
+	import logging
+
+	digest = "compute-optimal at 200 image tokens per parameter"  # no 20 anywhere
+	with caplog.at_level(logging.WARNING):
+		out = ScriptStage(ctx)._check_comparisons(_with_comparison(), digest)
+	assert out.scenes[0].visual.comparison is None
+	assert out.scenes[0].visual.type == "result_callout", (
+		"the scene survives, the animation does not"
+	)
+	assert "does not contain" in caplog.text
+
+
+def test_a_value_is_not_matched_inside_a_longer_number(ctx):
+	"""A digest saying 1200 does not license a claim of 200."""
+	out = ScriptStage(ctx)._check_comparisons(_with_comparison(), "trained on 1200 and 4020 things")
+	assert out.scenes[0].visual.comparison is None
+
+
+def test_a_rounded_value_still_matches(ctx):
+	"""Same tolerance the extract check uses: a digest's 80.4 backs a stated 80."""
+	out = ScriptStage(ctx)._check_comparisons(
+		_with_comparison(value_a=80, value_b=20), "reached 80.4 percent against 20.1 before"
+	)
+	assert out.scenes[0].visual.comparison is not None
+
+
+def test_the_wrapper_never_animates(ctx, monkeypatch):
+	"""A cold-open hook is a dozen words, and no digest reaches that call to
+	check its numbers against."""
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+	wrapper = episode_payload()
+	wrapper["cold_open"]["scenes"][0]["visual"] = {
+		"type": "result_callout",
+		"highlight": "200",
+		"comparison": {
+			"template": "count_up",
+			"label_a": "Tokens",
+			"value_a": 200,
+			"unit": "per parameter",
+		},
+	}
+	patch_llm(monkeypatch, ScriptedLLM([script_payload("2608.00001"), wrapper]))
+
+	episode = ScriptStage(ctx).run().episode
+	assert episode.cold_open is not None
+	assert all(s.visual.comparison is None for s in episode.cold_open.scenes)
+
+
+def test_a_malformed_comparison_costs_the_animation_not_the_segment(ctx, monkeypatch):
+	"""Regression: the first live run of prompt v6 returned a `two_bar` with no
+	`value_b`, and because the comparison was validated inside the SceneManifest
+	the whole segment failed to parse and the episode lost a paper (D36)."""
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	seed_extract(ctx, [PaperDigest.model_validate(digest_payload("2608.00001"))])
+
+	scenes = [scene(), scene("s2")]
+	scenes[1]["visual"]["type"] = "result_callout"
+	scenes[1]["visual"]["highlight"] = "200"
+	scenes[1]["visual"]["comparison"] = {  # two_bar with nothing to compare against
+		"template": "two_bar",
+		"label_a": "This paper",
+		"value_a": 200,
+	}
+	patch_llm(
+		monkeypatch,
+		ScriptedLLM([script_payload("2608.00001", scenes), episode_payload()]),
+	)
+
+	result = ScriptStage(ctx).run()
+	assert len(result.segments) == 1, "the segment survives"
+	seg = result.segments[0]
+	assert len(seg.scenes) == 2, "and keeps every scene"
+	assert seg.scenes[1].visual.type == "result_callout"
+	assert seg.scenes[1].visual.comparison is None, "only the animation is lost"
+
+
+def test_a_valid_comparison_still_arrives(ctx, monkeypatch):
+	papers = [make_enriched("2608.00001")]
+	seed(ctx, papers, ["2608.00001"])
+	digest = digest_payload(
+		"2608.00001", results=[{"statement": "200 against 20", "source": "Table 1"}]
+	)
+	seed_extract(ctx, [PaperDigest.model_validate(digest)])
+
+	scenes = [scene(), scene("s2")]
+	scenes[1]["visual"]["type"] = "result_callout"
+	scenes[1]["visual"]["comparison"] = {
+		"template": "two_bar",
+		"label_a": "This paper",
+		"value_a": 200,
+		"label_b": "Prior",
+		"value_b": 20,
+	}
+	patch_llm(
+		monkeypatch,
+		ScriptedLLM([script_payload("2608.00001", scenes), episode_payload()]),
+	)
+	seg = ScriptStage(ctx).run().segments[0]
+	assert seg.scenes[1].visual.comparison is not None
+	assert seg.scenes[1].visual.comparison.template == "two_bar"
+
+
+@pytest.mark.parametrize(
+	("field", "value"),
+	[("note", 65), ("unit", None), ("label_b", 20), ("note", None)],
+)
+def test_a_label_that_is_not_a_string_does_not_cost_the_animation(field, value):
+	"""Both of these were seen on the first live runs of prompt v6: `note: 65`
+	and `unit: null`. The value reaches the slide as text either way (D37)."""
+	from pipeline.schemas import Comparison
+
+	params = dict(template="two_bar", label_a="A", value_a=200, label_b="B", value_b=20)
+	params[field] = value
+	c = Comparison.model_validate(params)
+	assert isinstance(getattr(c, field), str)

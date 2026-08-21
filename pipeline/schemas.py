@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -217,12 +217,83 @@ class ExtractResult(StrictModel):
 VisualType = Literal["title_card", "figure", "bullet_slide", "result_callout", "transition"]
 
 
+class Comparison(StrictModel):
+	"""Parameters for an animated callout, chosen from a fixed set of templates.
+
+	The model fills these in; it never writes animation code. That is the whole
+	design: manim scenes that compile, read well and match the narration are hard
+	to generate and impossible to validate by eye at scale, whereas four numbers
+	and two labels can be checked in full (D36).
+
+	Optional everywhere it appears. Absent - or invalid, or unrenderable - and the
+	scene stays the static callout it is today.
+	"""
+
+	template: Literal["two_bar", "count_up", "split"]
+	# The paper's own value; the one the accent colour is spent on.
+	label_a: str
+	value_a: float
+	unit: str = ""
+	# The value being compared against. `two_bar` requires it; the others ignore
+	# it. This is what BASE exists for (D36).
+	label_b: str = ""
+	value_b: float | None = None
+	# A short line under the figure - "10x tokens per parameter". Never a sentence.
+	note: str = ""
+
+	@field_validator("label_a", "label_b", "unit", "note", mode="before")
+	@classmethod
+	def stringify(cls, v: object) -> object:
+		"""Accept a number, or a null, where a label was asked for.
+
+		Both observed live on the first two runs of prompt v6: `note: 65` and
+		`unit: null`, each costing an animation to a type error. The value is going
+		onto a slide as text either way and an absent label simply does not draw,
+		so refusing either buys nothing. `label_a` becoming empty is caught by
+		`check_template` where it actually matters.
+		"""
+		if v is None:
+			return ""
+		if isinstance(v, bool):
+			return str(v)
+		return f"{v:g}" if isinstance(v, int | float) else v
+
+	@model_validator(mode="after")
+	def check_template(self) -> Comparison:
+		if self.value_a <= 0:
+			raise ValueError("value_a must be positive; a bar cannot have zero length")
+		if self.template == "two_bar":
+			if self.value_b is None or self.value_b <= 0:
+				raise ValueError("two_bar needs a positive value_b to compare against")
+			if not self.label_b:
+				raise ValueError("two_bar needs label_b to say what value_b is")
+			ratio = max(self.value_a, self.value_b) / min(self.value_a, self.value_b)
+			if ratio > 500:
+				raise ValueError(
+					f"two_bar values differ by {ratio:.0f}x; the smaller bar would be "
+					"invisible. Use count_up and put the ratio in `note`."
+				)
+		if self.template == "split" and not 0 < self.value_a < 100:
+			raise ValueError("split expects value_a as a percentage between 0 and 100")
+		return self
+
+	def numbers(self) -> str:
+		"""The claimed values, for checking against the digest they came from."""
+		parts = [f"{self.value_a:g}"]
+		if self.value_b is not None:
+			parts.append(f"{self.value_b:g}")
+		return ", ".join(parts)
+
+
 class Visual(StrictModel):
 	type: VisualType
 	figure_file: str | None = None
 	title: str | None = None
 	bullets: list[str] = Field(default_factory=list)
 	highlight: str | None = None
+	# Only ever read for a `result_callout`, and only when render.animated_callouts
+	# is on. See D36.
+	comparison: Comparison | None = None
 
 
 class Scene(StrictModel):

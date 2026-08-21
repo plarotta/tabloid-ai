@@ -5,27 +5,40 @@ video series, **ML Papers of the Day**. `SPEC.md` is the full design;
 `DECISIONS.md` records every choice made along the way.
 
 **Status: all ten stages built. Stages 1-9 validated end-to-end against live
-APIs across three episodes; Stage 10 (upload) runs in dry-run until a YouTube
-compliance audit clears.** A single command turns a live arXiv window into an
-upload-ready episode: **`episode.mp4` (5:16, 1920x1080 H.264), three standalone
-segments, a thumbnail, and metadata with chapter timestamps** — for **$1.93**.
+APIs across three complete episodes; Stage 10 (upload) runs in dry-run until a
+YouTube compliance audit clears.** A single command turns a live arXiv window
+into an upload-ready episode: **`episode.mp4` (1920x1080 H.264), three standalone
+segments, a thumbnail, and metadata with chapter timestamps** — for about **$2**
+on a normal window.
+
+The fourth episode (2026-08-19) runs **4:20 across 31 clips at 9.0-9.8s a slide**,
+against episode one's 4:51 at 12.1s and episode three's 5:16 at 13.9s — the
+length and pace work of D34/D35, measured on a finished file. It cost **$2.97**
+over a 2,180-paper catch-up window, most of it Stage 2.
+
+**One caveat on that run:** it was finished with `--from script` after the
+Anthropic account ran out of credit mid-run, and a replay deliberately does not
+advance the window marker (D25). So `state.json` does not yet record this
+episode. See [The fetch window](#the-fetch-window).
 
 | Stage | Status | Validated against |
 |---|---|---|
-| 1 fetch | done | live arXiv API, 1,385 papers; window marker follows the index (D31) |
-| 2 shortlist | done | **live**, 1,382 scored after exclusions, $1.032 |
+| 1 fetch | done | live arXiv API, 1,385-2,180 papers; window marker follows the index (D31) |
+| 2 shortlist | done | **live**, 2,171 scored after exclusions, $1.635 |
 | 3 enrich | done | **live**, 15/15 papers, all LaTeX, zero failures |
 | 4 rank | done | **live**, 15 real candidates, 3 subfields, $0.099 |
 | 5 extract | done | **live**, 3 digests, every number traceable, $0.224 |
-| 6 script | done | **live**, 3 segments + wrapper + 3 bridges, 6-scene cap held, $0.099 |
-| 7 voice | done | **live**, 28 clips, ElevenLabs multilingual_v2, $0.480 |
-| 8 render | done | **live**, 8 parts, two-level crossfade, 5ms A/V drift |
+| 6 script | done | **live**, 3 segments + wrapper + 3 bridges, scene cap and word budget held, $0.126-0.356 |
+| 7 voice | done | **live**, 24-31 clips, ElevenLabs multilingual_v2, $0.373-0.480 |
+| 8 render | done | **live**, 7-8 parts, two-level crossfade, 5ms A/V drift |
 | 9 package | done | **live**, episode + segments + thumbnail + chapters (−0.09s) |
 | 10 upload | dry-run | request body validated against the real bundle; **live path blocked on a YouTube API compliance audit** |
 
-A full run is 1,385 papers → 15 shortlisted → 15 enriched → 3 finalists →
-3 digests → 28 narrated scenes → 8 rendered parts → one episode. About 10 minutes
-end to end, most of it arXiv rate limiting and ffmpeg.
+A full run is 1,385-2,180 papers → 15 shortlisted → 15 enriched → 3 finalists →
+3 digests → ~31 narrated scenes → 8 rendered parts → one episode. About 10-20
+minutes end to end, most of it arXiv rate limiting and ffmpeg. Stage 2 scores
+every paper in the window, so both the runtime and the cost track how long it has
+been since the last run.
 
 Scheduling is built (Tue/Thu on GitHub Actions) but **switched off** — see
 [Scheduling](#scheduling) for the one command that starts it.
@@ -77,7 +90,7 @@ Two workflows, split by whether they can spend money:
 
 | Workflow | Trigger | Secrets | What it does |
 |---|---|---|---|
-| `ci.yml` | every push + PR | **none** | ruff, 186 tests, and the Linux render check |
+| `ci.yml` | every push + PR | **none** | ruff, 249 tests, and the Linux render check |
 | `episode.yml` | Tue/Thu 13:00 UTC, or manual | API keys | one full episode, uploaded as an artifact |
 
 **The schedule is off.** Each run spends ~$1.73, so it does nothing until you opt
@@ -136,10 +149,12 @@ pipeline/
   state.py       last-successful-run marker, for the next fetch window
   llm/           provider-agnostic client + cost tracking
   tts/           Stage 7: interface + macOS/OpenAI adapters (D19)
-  render/        Stage 8: Pillow slide composition + thumbnail (D20)
+  render/        Stage 8: Pillow slide composition, captions, thumbnail (D20, D33)
   youtube.py     Stage 10: YouTube Data API v3 client, upload scope only (D24)
   stages/        one module per stage
 prompts/         all prompts as versioned files, never inline strings
+                 (one directory per stage, plus condense/ - the pass that sends
+                 an over-long segment back for a shorter draft, D34)
 ```
 
 ### Stage 3 (enrich) is free
@@ -156,17 +171,24 @@ Every billed call goes through `MeteredClient`, which prices it against
 crashes still leaves an accurate partial trail. Exceeding `budget.ceiling_usd`
 aborts the run.
 
-Cost of one clean pass over a real 1,225-paper window:
+Cost of one clean pass over a real 1,225-paper window, and over the 2,180-paper
+catch-up window of 2026-08-19:
 
-| Stage | Calls | Cost | Target |
-|---|---|---|---|
-| shortlist | 62 | $0.921 | $1.00 |
-| enrich | 0 | $0.000 | — (no LLM calls) |
-| rank | 1 | $0.102 | $2.00 |
-| extract | 3 | $0.146 | $6.00 |
-| script | 4 | $0.090 | $3.00 |
-| voice | 27 | $0.469 | $1.00 |
-| **per episode** | **97** | **$1.728** | ceiling $3.00 |
+| Stage | Calls | 1,225 papers | Calls | 2,180 papers | Target |
+|---|---|---|---|---|---|
+| shortlist | 62 | $0.921 | 109 | $1.635 | $1.00 |
+| enrich | 0 | $0.000 | 0 | $0.000 | — (no LLM calls) |
+| rank | 1 | $0.102 | 1 | $0.108 | $2.00 |
+| extract | 3 | $0.146 | 3 | $0.239 | $6.00 |
+| script | 4 | $0.090 | 7 | $0.126 | $3.00 |
+| voice | 27 | $0.469 | 24 | $0.373 | $1.00 |
+| **per episode** | **97** | **$1.728** | **144** | **$2.481** | ceiling $4.00 |
+
+Only Stage 2 moves with the window: it scores every paper fetched, so a run costs
+roughly what the gap since the last one costs. That is why the ceiling is $4.00
+rather than $3.00 — a 7.4-day catch-up window left no headroom under the old one
+(D34). The script column includes the condense pass, which is a second call
+against any part that comes back over its word budget.
 
 `runs/2026-08-07/` itself reports **$1.96 over 158 calls** — higher because
 extract and script were each re-run once and narration three times (once per TTS
@@ -195,7 +217,7 @@ invocations**: resuming with `--from` does not grant a fresh budget.
 ## Tests
 
 ```bash
-pytest        # 186 tests, no network, no API spend; ffmpeg optional
+pytest        # 249 tests, no network, no API spend; ffmpeg optional
 ruff check .
 ```
 
@@ -237,13 +259,20 @@ the standalone segment, which has to be publishable on its own (D26).
 
 ## Known gaps
 
-- **The episode runs long.** 5:16 against a 4:30 target (D29). Segments are close
-  — 250s against 225s — but the wrapper grew to 66s once the cold open had to
-  name the series and the shared thread (D30). Trimming means the wrapper, not
-  the papers.
-- **Stage 2 headroom is gone, not thin** — $1.03 measured against a $1.00 target
-  on the last two runs (D15). The target needs raising or the batch size
-  revisiting.
+- **An episode finished by replay does not record itself.** `_advance_window`
+  requires a `--from fetch` run that reaches `package`, so the 2026-08-19
+  episode — finished with `--from script` — left the marker at 2026-08-12 and its
+  three papers out of the covered ledger. That guard is right for a partial
+  rebuild and wrong for a completed episode, and nothing currently tells the two
+  apart. Until it does, a replayed episode needs its coverage recorded by hand
+  when it is published (D32, D35).
+- **The runtime projection is good to about ±5%.** It reads the finished length
+  off the word count at Stage 6 rather than waiting for Stage 8. The read rate
+  moves with how long the words are — 2.33 to 2.45 spoken words a second across
+  four runs — so treat "4:45" as "somewhere between 4:31 and 4:59" (D34).
+- **Stage 2's $1.00 target is not a fixed number.** It cost $1.03 on a 3.6-day
+  window and $1.63 on a 7.4-day one, because it scores every paper in the window
+  (D15, D34). The target wants to scale with the window, or be dropped.
 - **A run during an arXiv index stall fails loudly** rather than skipping papers
   (D31). That is the right trade, but a scheduled run can fail for reasons that
   have nothing to do with this code — as it did on 2026-08-13.
@@ -251,6 +280,42 @@ the standalone segment, which has to be publishable on its own (D26).
   tags can defeat it (D16). A closed tag vocabulary in the prompt is the fix.
 - **EPS/PS figures cannot be rasterised** — needs ghostscript, which is not
   installed. PDF and raster figures work (D12).
+- **Captions and Ken Burns are built but switched off.** `render.captions` and
+  `render.motion` work end to end and were validated against a real episode —
+  same frame count, same duration, and with both off the render reproduces the
+  pre-change episode to the byte. They are off because the *look* was rejected
+  on review, not the mechanism (D33). Turning them on unchanged reproduces what
+  was rejected; the caption's container and the ~16% band it takes out of every
+  slide are what need rethinking first. Motion also needs
+  `crossfade_seconds > 0` — the zoom is a per-slide filter and a hard-cut render
+  has one input for the whole part — and costs 2.5x file size and 1.9x render
+  time.
+- **A dead API account was treated as a flaky one.** Fixed, but worth knowing it
+  happened: on 2026-08-19 an exhausted credit balance came back as a 400, got
+  retried three times, and then fell through the "a wrapper failure is not worth
+  failing an episode over" path (D18) — so the run narrated and rendered an
+  episode with no title before Stage 10 stopped it. Account-level failures are
+  now a distinct error that is never retried and never degraded around, and the
+  script stage fails at its boundary instead (D35). The same broad handlers still
+  exist in the other LLM stages.
+- **The visual system flipped back.** Near-black ground and a single accent, as
+  in episode one (D35), reversing the paper-white ground and per-paper accents of
+  D27. Both palettes are recorded; the swap is six constants in
+  `render/slides.py`. The ground is since lifted slightly off black, and a sixth
+  palette role — `BASE`, for the value a comparison is measured against — was
+  added but is not yet drawn by any static slide type (D36).
+- **Animated callouts have never rendered on Linux.** They work on macOS and
+  ship in the 2026-08-19 episode, but manim draws through cairo and pango and the
+  scheduled workflow has never run with the `manim` extra installed. If those
+  libraries are missing on the runner, every callout falls back to a static slide
+  — correctly and silently, which is the failure mode to watch for rather than a
+  crash (D37). The same caveat as the render path itself.
+- **A `note` can describe a different ratio than its bars draw.** `two_bar`
+  renders `note` under a brace spanning the gap between the two bars, so a true
+  fact about some *other* ratio reads as a claim about the one on screen. It
+  happened on the first live run ("dynamics receive 65x more labels" under bars
+  of 79.4 and 21.4). No schema can catch it; `script/v7` states the rule, and
+  that is the whole defence (D37).
 - **The music bed is off by default.** No royalty-free track is shipped; the
   synthesised fallback reads as hum once audible. Drop a file in `assets/music/`
   and set `render.background_music: true` (D21).

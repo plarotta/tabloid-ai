@@ -59,11 +59,19 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          # manim draws its text through pango and its shapes through cairo.
+          # Without these the `manim` extra installs but every animated callout
+          # falls back to a still, silently and correctly (D37).
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2-dev libpango1.0-dev pkg-config
 
       - uses: astral-sh/setup-uv@v5
 
       - name: Install
-        run: uv pip install --system -e '.[anthropic]'
+        # `manim` is what makes animated callouts animate. It is a ~260MB
+        # install; with it absent the episode still renders, with those scenes
+        # as static text.
+        run: uv pip install --system -e '.[anthropic,manim]'
 
       # state.json carries the fetch window forward so consecutive runs do not
       # re-cover the same papers. Restore-only here; it is saved at the end, and
