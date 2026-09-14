@@ -30,7 +30,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFont
 
 log = logging.getLogger(__name__)
 
@@ -279,9 +279,60 @@ def chrome(draw: ImageDraw.ImageDraw, ctx: SlideContext, show_eyebrow: bool = Tr
 # --- slide types -------------------------------------------------------------
 
 
-def title_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image:
+def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
+	"""Scale to fill w x h and centre-crop the overflow."""
+	scale = max(w / img.width, h / img.height)
+	img = img.resize(
+		(max(int(img.width * scale), w), max(int(img.height * scale), h)), Image.LANCZOS
+	)
+	left, top = (img.width - w) // 2, (img.height - h) // 2
+	return img.crop((left, top, left + w, top + h))
+
+
+def backdrop_ground(ctx: SlideContext, path: Path) -> Image.Image:
+	"""A generated image, pushed back until it is a ground rather than a picture.
+
+	Three things happen to it, and each is doing a job. It is desaturated most of
+	the way, because the palette has exactly one accent (D35) and an image full of
+	its own colours would compete with it for the only job colour has here. It is
+	darkened, so the frame still reads as the same near-black ground as every
+	other slide. And a left-to-right scrim takes the left third almost to flat
+	ground, because the type is left-aligned and the image is only allowed to show
+	where nothing is written.
+
+	Falls back to the flat ground if the file will not open - a generated image is
+	the one input here that arrived over a network.
+	"""
+	try:
+		art = _cover(Image.open(path).convert("RGB"), ctx.width, ctx.height)
+	except Exception as e:
+		log.warning("Backdrop %s unusable (%s); using the flat ground", path, e)
+		return Image.new("RGB", (ctx.width, ctx.height), BG)
+
+	art = ImageEnhance.Color(art).enhance(0.35)
+	art = ImageEnhance.Brightness(art).enhance(0.62)
+
+	# One row of the gradient, stretched: the scrim varies across x only.
+	row = Image.new("L", (ctx.width, 1))
+	row.putdata(
+		[
+			int(255 * (0.93 - 0.63 * min(max((x / ctx.width - 0.18) / 0.62, 0.0), 1.0)))
+			for x in range(ctx.width)
+		]
+	)
+	scrim = row.resize((ctx.width, ctx.height))
+	return Image.composite(Image.new("RGB", art.size, BG), art, scrim)
+
+
+def title_card(
+	ctx: SlideContext, title: str, subtitle: str = "", backdrop: Path | None = None
+) -> Image.Image:
 	"""Opens every segment, so it carries the paper's hook and nothing else."""
-	img = Image.new("RGB", (ctx.width, ctx.height), BG)
+	img = (
+		backdrop_ground(ctx, backdrop)
+		if backdrop is not None
+		else Image.new("RGB", (ctx.width, ctx.height), BG)
+	)
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
@@ -379,40 +430,108 @@ def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Im
 	return img
 
 
-def bullet_slide(ctx: SlideContext, title: str, bullets: list[str]) -> Image.Image:
+def bullet_slide(
+	ctx: SlideContext, title: str, bullets: list[str], reveal: int | None = None
+) -> Image.Image:
+	"""A short list, set as numbered rows rather than as dots.
+
+	The dotted version read as a default: a bullet glyph carries no information
+	and every list on every deck has one. Numbering the rows says how many there
+	are and how far through them the viewer is, and a hairline between rows gives
+	the block a structure the eye can rest on. Both come free - the slide holds
+	the same words in the same place (D39).
+
+	Rows are measured before they are drawn, so a four-line bullet and a two-word
+	one keep the rule centred between them rather than crowding one and stranding
+	the other.
+
+	`reveal` draws only the first N rows and leaves the rest blank. Every row is
+	still measured, so the block sits where it will sit once the list is whole -
+	which is the point: Stage 8 renders one of these per row and dissolves between
+	them, and a layout that recentred on each pass would slide the text up the
+	frame instead of adding to it.
+	"""
 	img = Image.new("RGB", (ctx.width, ctx.height), BG)
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
-	indent = ctx.scaled(52)
 
-	bf = regular(ctx.scaled(46))
-	shown = [b for b in bullets[:5] if b.strip()]
-	wrapped = [wrap(d, b, bf, box - indent) for b in shown]
-	spacing = ctx.scaled(30)
+	shown = [b.strip() for b in bullets[:5] if b.strip()]
+
+	pad_top = ctx.scaled(26)  # air inside a row, above and below its text
+	pad_bottom = ctx.scaled(30)
+	rule_h = max(ctx.scaled(2), 1)
 
 	tf = tl = None
-	total = sum(block_height(w, bf) + spacing for w in wrapped)
+	title_h = 0
 	if title:
 		tf, tl = fit_text(d, title, _BOLD, box, ctx.fitted(190), start=ctx.scaled(60))
-		total += block_height(tl, tf) + ctx.scaled(52)
+		title_h = block_height(tl, tf) + ctx.scaled(58)
 
-	y = max(int((ctx.content_height - total) / 2), ctx.scaled(200))
+	# The body size is fitted to the rows rather than fixed. A fixed size is only
+	# ever right for a full list: two short bullets at 46px left three quarters of
+	# the frame empty and read as a slide with nothing on it (owner, Ep. 7). The
+	# rows now take the room they are given - the largest size at which they still
+	# fit the body box wins - so a two-row slide sets large and a five-row one
+	# lands near where it always did.
+	body_box = max(ctx.fitted(780) - title_h, ctx.scaled(120))
+
+	def rows_at(size: int):
+		f = regular(size)
+		g = int(size * 2.1)  # the gutter tracks the body size, not the frame
+		w = [wrap(d, b, f, box - g) for b in shown]
+		h = [block_height(x, f) + pad_top + pad_bottom for x in w]
+		return w, h, g
+
+	lo, hi, best = ctx.scaled(38), ctx.scaled(104), ctx.scaled(38)
+	while lo <= hi:
+		mid = (lo + hi) // 2
+		_, h, _ = rows_at(mid)
+		if sum(h) + rule_h * max(len(h) - 1, 0) <= body_box:
+			best, lo = mid, mid + 1
+		else:
+			hi = mid - 1
+
+	bf = regular(best)
+	wrapped, heights, gutter = rows_at(best)
+	nf = bold(max(int(best * 0.56), 12))  # the row number, set small and letter-spaced
+	tracking = max(ctx.scaled(3), 1)
+	number_drop = int(best * 0.22)  # the number rides the first line, so it scales with it
+
+	total = sum(heights) + rule_h * max(len(heights) - 1, 0) + title_h
+
+	y = max(int((ctx.content_height - total) / 2), ctx.scaled(150))
 	if tf is not None:
-		y = draw_lines(d, tl, tf, m, y, FG) + ctx.scaled(52)
+		y = draw_lines(d, tl, tf, m, y, FG) + ctx.scaled(58)
 
-	dot = ctx.scaled(15)
-	for w in wrapped:
-		cy = y + int(bf.size * 0.46)
-		d.ellipse([m, cy, m + dot, cy + dot], fill=ctx.accent)
-		y = draw_lines(d, w, bf, m + indent, y, FG) + spacing
+	for i, (w, h) in enumerate(zip(wrapped, heights, strict=True)):
+		text_y = y + pad_top
+		if reveal is None or i < reveal:
+			# The number sits on the first line's optical centre, not on the row's:
+			# on a three-line bullet a vertically centred index reads as detached.
+			_draw_tracked(d, f"{i + 1:02d}", nf, m, text_y + number_drop, ctx.accent, tracking)
+			draw_lines(d, w, bf, m + gutter, text_y, FG)
+		y += h
+		# The rule separates two rows, so it waits for the second of them.
+		if i < len(heights) - 1:
+			if reveal is None or i + 1 < reveal:
+				d.rectangle([m, y, ctx.width - m, y + rule_h], fill=FAINT)
+			y += rule_h
 
 	chrome(d, ctx)
 	return img
 
 
-def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Image.Image:
-	"""A single number or finding, as large as it will go."""
+def result_callout(
+	ctx: SlideContext, highlight: str, caption: str = "", reveal: bool = True
+) -> Image.Image:
+	"""A single number or finding, as large as it will go.
+
+	`reveal=False` measures the number and then does not draw it, leaving the rule
+	on an empty stage. Dissolving that into the drawn version lands the number
+	rather than cutting to it, and because both passes measure the same text the
+	rule does not move underneath it.
+	"""
 	img = Image.new("RGB", (ctx.width, ctx.height), BG)
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(MARGIN)
@@ -429,8 +548,9 @@ def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Imag
 	y = max(int((ctx.content_height - total) / 2), ctx.scaled(150))
 
 	for line in lines:
-		w = d.textlength(line, font=font)
-		d.text(((ctx.width - w) / 2, y), line, font=font, fill=ctx.accent)
+		if reveal:
+			w = d.textlength(line, font=font)
+			d.text(((ctx.width - w) / 2, y), line, font=font, fill=ctx.accent)
 		y += int(font.size * 1.2)
 
 	# Short centred rule under the number - anchors the block.
@@ -449,12 +569,48 @@ def result_callout(ctx: SlideContext, highlight: str, caption: str = "") -> Imag
 	return img
 
 
+def _trim_border(fig: Image.Image) -> Image.Image:
+	"""Crop the uniform margin a paper figure is saved with.
+
+	Figures are cropped for a page, not a frame: a typical one carries an inch of
+	white on every side, and that margin is then scaled down with the content it
+	surrounds, so the part worth seeing arrives smaller than the card it sits on.
+	Trimming costs nothing - the border is one flat colour by definition, and what
+	is removed carries no ink.
+
+	Deliberately conservative. It measures against the corner pixel, keeps a thin
+	pad so nothing touches the card edge, and returns the figure untouched unless
+	the crop is both meaningful and sane. A figure that is mostly background - a
+	scatter plot on white - must not be mistaken for a figure that is mostly
+	margin, which is why the bounding box is taken over ink rather than over rows.
+	"""
+	try:
+		flat = Image.new("RGB", fig.size, fig.convert("RGB").getpixel((0, 0)))
+		box = ImageChops.difference(fig.convert("RGB"), flat).getbbox()
+	except Exception:
+		return fig
+	if not box:
+		return fig
+	pad = max(int(min(fig.width, fig.height) * 0.01), 2)
+	left, top, right, bottom = box
+	left, top = max(left - pad, 0), max(top - pad, 0)
+	right, bottom = min(right + pad, fig.width), min(bottom + pad, fig.height)
+	w, h = right - left, bottom - top
+	# Not worth a crop, or the result is a sliver: leave it alone.
+	if w < fig.width * 0.25 or h < fig.height * 0.25:
+		return fig
+	if w > fig.width * 0.97 and h > fig.height * 0.97:
+		return fig
+	return fig.crop((left, top, right, bottom))
+
+
 def figure_slide(
 	ctx: SlideContext,
 	figure_path: Path,
 	attribution: str,
 	title: str = "",
 	caption: str = "",
+	reveal: bool = True,
 ) -> Image.Image:
 	"""A paper figure on a white card, with its source burned in.
 
@@ -468,19 +624,23 @@ def figure_slide(
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(MARGIN)
 
-	top = ctx.scaled(198) if title else ctx.scaled(140)
+	top = ctx.scaled(150) if title else ctx.scaled(104)
 	if title:
 		tf, lines = fit_text(
-			d, title, _BOLD, ctx.width - 2 * m, ctx.fitted(100), start=ctx.scaled(46)
+			d, title, _BOLD, ctx.width - 2 * m, ctx.fitted(84), start=ctx.scaled(40)
 		)
-		draw_lines(d, lines, tf, m, ctx.scaled(116), FG)
+		draw_lines(d, lines, tf, m, ctx.scaled(104), FG)
 
 	# Reserve room under the card for a caption line when there is one.
 	cf = regular(ctx.scaled(28))
 	cap = truncate(d, caption, cf, ctx.width - 2 * m) if caption else ""
-	bottom = ctx.content_height - (ctx.scaled(186) if cap else ctx.scaled(140))
+	bottom = ctx.content_height - (ctx.scaled(172) if cap else ctx.scaled(104))
 
-	card = [m, top, ctx.width - m, bottom]
+	# The card runs to a tighter margin than the type does. Text needs a reading
+	# margin; a figure only needs to not touch the edge, and every pixel given
+	# back here is a pixel of figure (owner, Ep. 7).
+	fm = ctx.scaled(72)
+	card = [fm, top, ctx.width - fm, bottom]
 	d.rounded_rectangle(
 		card, radius=ctx.scaled(18), fill=CARD, outline=FAINT, width=max(ctx.scaled(2), 1)
 	)
@@ -500,7 +660,17 @@ def figure_slide(
 			fig = flat
 		else:
 			fig = fig.convert("RGB")
-		fig.thumbnail((inner_w, inner_h), Image.LANCZOS)
+		fig = _trim_border(fig)
+		# `thumbnail` only ever shrinks, so a figure saved small arrived small and
+		# sat marooned in the middle of the card. Scale to the card in both
+		# directions, capped at 2x native: past that a raster figure turns to
+		# porridge and reads worse than it did at half the size.
+		scale = min(inner_w / fig.width, inner_h / fig.height, 2.0)
+		if abs(scale - 1.0) > 0.01:
+			fig = fig.resize(
+				(max(int(fig.width * scale), 1), max(int(fig.height * scale), 1)),
+				Image.LANCZOS,
+			)
 		img.paste(
 			fig,
 			(
@@ -524,15 +694,34 @@ def figure_slide(
 		font=regular(ctx.scaled(25)),
 		fill=(112, 112, 112),
 	)
-	if cap:
+	# Reserved either way (`bottom` is already measured for it), so withholding
+	# the caption for one state moves nothing but the caption.
+	if cap and reveal:
 		d.text((m, bottom + ctx.scaled(22)), cap, font=cf, fill=DIM)
 
 	chrome(d, ctx)
 	return img
 
 
-def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
-	"""Dispatch a SceneManifest visual to its slide type."""
+def render_visual(
+	ctx: SlideContext,
+	visual,
+	scene_id: str = "",
+	backdrop: Path | None = None,
+	reveal: int | None = None,
+) -> Image.Image:
+	"""Dispatch a SceneManifest visual to its slide type.
+
+	`backdrop` is only ever read by the title card; every other slide type is
+	dense enough already, and an image behind a figure would be competing with
+	the one thing the format exists to show.
+
+	`reveal` renders a partial state of the slide, for the staged reveals in
+	`render/reveal.py`. `None` - the default everywhere except that module - is
+	the whole slide, so nothing that does not ask for a reveal can get one. What
+	the number means depends on the type: rows shown, for a bullet slide; whether
+	the number or the caption is drawn yet, for the other two.
+	"""
 	vtype = visual.type
 	if vtype == "transition":
 		return transition_card(ctx, visual.title or "", visual.highlight or "")
@@ -540,12 +729,24 @@ def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
 		path = ctx.figures_dir / Path(visual.figure_file).name
 		num = "".join(c for c in Path(visual.figure_file).stem if c.isdigit()).lstrip("0") or "?"
 		attribution = f"Figure {num}, arXiv:{ctx.arxiv_id}" if ctx.arxiv_id else f"Figure {num}"
-		return figure_slide(ctx, path, attribution, visual.title or "", visual.highlight or "")
+		return figure_slide(
+			ctx,
+			path,
+			attribution,
+			visual.title or "",
+			visual.highlight or "",
+			reveal=reveal is None or reveal >= 1,
+		)
 	if vtype == "result_callout":
-		return result_callout(ctx, visual.highlight or visual.title or "", "")
+		return result_callout(
+			ctx,
+			visual.highlight or visual.title or "",
+			"",
+			reveal=reveal is None or reveal >= 1,
+		)
 	if vtype == "bullet_slide":
-		return bullet_slide(ctx, visual.title or "", list(visual.bullets))
-	return title_card(ctx, visual.title or ctx.segment_label, "")
+		return bullet_slide(ctx, visual.title or "", list(visual.bullets), reveal=reveal)
+	return title_card(ctx, visual.title or ctx.segment_label, "", backdrop)
 
 
 def thumbnail(

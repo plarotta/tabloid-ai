@@ -58,6 +58,28 @@ def mark_successful_run(when: datetime | None = None, path: Path | None = None) 
 	_write(path, data)
 
 
+def episode_number(path: Path | None = None, default: int = 1) -> int:
+	"""Which episode the next packaged run is.
+
+	Beside the window marker because it advances for the same reason and at the
+	same moment: one packaged episode over one covered window. Kept here rather
+	than in config so a scheduled run numbers itself.
+	"""
+	raw = _read(path or STATE_PATH).get("episode_number")
+	return raw if isinstance(raw, int) and raw > 0 else default
+
+
+def advance_episode_number(path: Path | None = None) -> int:
+	"""Consume the current number and record the next. Returns what was used."""
+	path = path or STATE_PATH
+	data = _read(path)
+	used = data.get("episode_number")
+	used = used if isinstance(used, int) and used > 0 else 1
+	data["episode_number"] = used + 1
+	_write(path, data)
+	return used
+
+
 def covered_papers(path: Path | None = None) -> set[str]:
 	"""arXiv IDs that have already had a segment in a packaged episode."""
 	raw = _read(path or STATE_PATH).get("covered_papers")

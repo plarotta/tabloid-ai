@@ -54,11 +54,16 @@ _SEGMENT_SHAPE = (
 	"number still lands that number."
 )
 _COLD_OPEN_SHAPE = (
-	"The first scene names the series and then the thread these papers share. "
-	"Every scene after it teases exactly one paper with one concrete hook."
+	"Three scenes: the thesis these papers jointly support, the most striking "
+	"number in the episode, then one line handing into them that names the "
+	"series. The thesis stays in the first scene - it is the reason to keep "
+	"watching, and shortening the open must not cost it."
 )
 
 YOUTUBE_TITLE_MAX = 70
+# The channel, named in D30. Stage 9 prefixes every YouTube title with it and an
+# episode number; the cold open says it aloud and the opening card carries it.
+SERIES_NAME = "ML Papers of the Day"
 
 
 # A value the model put in a comparison, matched against the digest it came
@@ -220,9 +225,20 @@ class ScriptStage(Stage):
 				continue
 			missing = [
 				f"{v:g}"
-				for v in (c.value_a, c.value_b)
+				for v in (c.value_a, c.value_b, c.steps)
 				if v is not None and not _states(v, digest_text)
 			]
+			# A curve needs somewhere to fall to and a distance to fall over;
+			# without either it is a line, and a line is not the claim.
+			if not missing and c.template == "decay_curve" and (c.value_b is None or not c.steps):
+				log.warning(
+					"%s/%s: decay_curve needs value_b and steps; "
+					"rendering it as a static callout",
+					manifest.arxiv_id,
+					scene.id,
+				)
+				scene.visual.comparison = None
+				continue
 			if missing:
 				log.warning(
 					"%s/%s: comparison claims %s, which the digest does not contain; "
@@ -560,11 +576,9 @@ class ScriptStage(Stage):
 				f"justification: {just.get(d.arxiv_id, '')}"
 			)
 
-		# One scene to name the series and the thread, then one tease per paper.
-		# The teases get the bulk of the budget; the framing scene takes what is
-		# left, which is the ordering the cold open reads in.
+		# Three scenes since v8: thesis, the episode's most striking number, then
+		# the hand-off that names the series (owner review of Ep. 5).
 		cold_words = int(cfg.cold_open_seconds / 60 * cfg.words_per_minute)
-		tease_words = round(cold_words * 0.7 / max(len(digests), 1))
 		trans_words = int(cfg.transition_seconds / 60 * cfg.words_per_minute)
 		outro_words = int(cfg.outro_seconds / 60 * cfg.words_per_minute)
 		system, user = prompt.render(
@@ -572,9 +586,6 @@ class ScriptStage(Stage):
 			papers="\n".join(blocks),
 			cold_open_seconds=cfg.cold_open_seconds,
 			cold_open_words=cold_words,
-			cold_open_scenes=len(digests) + 1,
-			framing_words=cold_words - tease_words * len(digests),
-			tease_words=tease_words,
 			transition_seconds=cfg.transition_seconds,
 			transition_words=trans_words,
 			# A ceiling rather than a target: "about twelve words" read as a
@@ -582,6 +593,9 @@ class ScriptStage(Stage):
 			transition_words_max=round(trans_words * 1.25),
 			outro_seconds=cfg.outro_seconds,
 			outro_words=outro_words,
+			# The model writes only what follows the prefix Stage 9 adds.
+			title_prefix=f"{SERIES_NAME} Ep. N: ",
+			title_max=YOUTUBE_TITLE_MAX - len(f"{SERIES_NAME} Ep. 99: "),
 			wpm=cfg.words_per_minute,
 		)
 		try:
@@ -643,9 +657,10 @@ class ScriptStage(Stage):
 		"""Measure the wrapper against its budget, in words, at the stage that
 		writes it.
 
-		Nothing is cut. The cold open cannot lose a scene without losing a paper's
-		tease, and a bridge is one sentence that is either there or not - so unlike
-		a segment, there is no trim here that keeps the shape. What there is to fix
+		Nothing is cut. The cold open's three scenes each do a different job - the
+		thesis, the number, the hand-off - and a bridge is one sentence that is
+		either there or not, so unlike a segment there is no trim here that keeps
+		the shape. What there is to fix
 		is the prompt, and what was missing was knowing before the render that it
 		needed fixing: the 2026-08-13 wrapper ran 66s against a 46s budget and that
 		only became visible as a 5:16 episode two stages later (D34).

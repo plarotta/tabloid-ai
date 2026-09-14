@@ -38,7 +38,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
-from ..render import animate, captions
+from ..render import animate, captions, reveal
+from ..render import backdrop as backdrops
 from ..render.captions import Cue
 from ..render.slides import BG as SLIDE_BG
 from ..render.slides import SlideContext, render_visual
@@ -130,10 +131,12 @@ class RenderStage(Stage):
 	) -> list[Slide]:
 		"""One frame per narrated scene, in narration order.
 
-		Usually a PNG. A `result_callout` the model supplied comparison parameters
-		for becomes an mp4 instead, when `render.animated_callouts` is on and manim
-		is installed - and falls back to the PNG on any failure, so this returns a
-		renderable slide for every scene either way (D36).
+		Usually a PNG. Two kinds of scene become an mp4 instead: a `result_callout`
+		the model supplied comparison parameters for, drawn by manim when
+		`render.animated_callouts` is on (D36); and any slide with something to
+		stage - bullets, a headline number, a figure caption - when
+		`render.slide_reveals` is on. Both fall back to the PNG on any failure, so
+		this returns a renderable slide for every scene either way.
 
 		`hold` is the cross-dissolve overlap the caller will add on top of each
 		scene's measured duration. A clip has to cover it, because unlike a still
@@ -143,6 +146,10 @@ class RenderStage(Stage):
 		by_id = {s.id: s for s in manifest.scenes}
 		cfg = self.config.render
 		animating = cfg.animated_callouts and animate_ok
+		# Both moving paths need the per-slide input the cross-dissolve builds:
+		# the hard-cut path feeds one still for the whole part and has nowhere to
+		# hang a clip.
+		revealing = cfg.slide_reveals and animate_ok
 
 		out_dir.mkdir(parents=True, exist_ok=True)
 		slides = []
@@ -167,11 +174,45 @@ class RenderStage(Stage):
 					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))
 					continue
 
-			img = render_visual(ctx, scene.visual, scene.id)
+			# manim first, then this: a callout with a comparison should be drawn
+			# as a chart rather than faded up as text.
+			if revealing and reveal.wants_reveal(scene.visual):
+				staged = reveal.render_clip(
+					scene.visual,
+					ctx,
+					clip.duration_seconds + hold,
+					out_dir,
+					f"{i:03d}_{scene.id}",
+					fps=cfg.fps,
+					backdrop=self._backdrop_for(scene.visual, ctx),
+					timeout=cfg.animate_timeout_seconds,
+				)
+				if staged is not None:
+					slides.append(Slide(staged, scene.visual.type, scene.narration, animated=True))
+					continue
+
+			img = render_visual(ctx, scene.visual, scene.id, self._backdrop_for(scene.visual, ctx))
 			path = out_dir / f"{i:03d}_{scene.id}.png"
 			img.save(path, "PNG")
 			slides.append(Slide(path, scene.visual.type, scene.narration))
 		return slides
+
+	def _backdrop_for(self, visual, ctx: SlideContext) -> Path | None:
+		"""A generated ground for a title card, or None for the flat one.
+
+		Cached across renders in the run directory, so the repeated re-renders
+		this stage invites stay free after the first (D39).
+		"""
+		if not self.config.render.title_backdrops or visual.type != "title_card":
+			return None
+		subject = visual.title or ctx.segment_label or ctx.eyebrow
+		return backdrops.generate(
+			subject,
+			self.paths.stage_dir("render") / "_backdrops",
+			tracker=self.tracker,
+			stage=self.name,
+			model=self.config.render.backdrop_model,
+		)
 
 	def _slide_context(
 		self,

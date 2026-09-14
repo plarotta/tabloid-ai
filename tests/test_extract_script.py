@@ -947,3 +947,54 @@ def test_a_label_that_is_not_a_string_does_not_cost_the_animation(field, value):
 	params[field] = value
 	c = Comparison.model_validate(params)
 	assert isinstance(getattr(c, field), str)
+
+
+# --- decay_curve (D42) -------------------------------------------------------
+
+
+def _with_decay(**overrides):
+	params = {
+		"template": "decay_curve",
+		"label_a": "Task success",
+		"value_a": 95,
+		"value_b": 2,
+		"steps": 16,
+		"unit": "%",
+	}
+	params.update(overrides)
+	return SceneManifest.model_validate(
+		{
+			"arxiv_id": "2609.01660",
+			"scenes": [
+				{
+					"id": "s1",
+					"narration": "Success falls from ninety-five to two within sixteen steps.",
+					"visual": {"type": "result_callout", "highlight": "2%", "comparison": params},
+					"est_seconds": 9,
+				}
+			],
+		}
+	)
+
+
+def test_a_decay_curve_backed_by_the_digest_survives(ctx):
+	digest = "success falls from 95% at one step to 2% by 16 steps"
+	out = ScriptStage(ctx)._check_comparisons(_with_decay(), digest)
+	assert out.scenes[0].visual.comparison is not None
+
+
+def test_an_invented_step_count_is_dropped(ctx):
+	"""`steps` is the x-axis, and the x-axis is a claim: a curve drawn over a
+	horizon the paper never measured is the same error as an invented baseline."""
+	digest = "success falls from 95% to 2%"  # no 16 anywhere
+	out = ScriptStage(ctx)._check_comparisons(_with_decay(), digest)
+	assert out.scenes[0].visual.comparison is None
+	assert out.scenes[0].visual.type == "result_callout"
+
+
+def test_a_decay_curve_without_an_endpoint_is_dropped(ctx):
+	"""Two of the three values are real, so the digest check passes - but a
+	curve with nowhere to fall to is a line, and a line is not the finding."""
+	digest = "success falls from 95% over 16 steps"
+	out = ScriptStage(ctx)._check_comparisons(_with_decay(value_b=None), digest)
+	assert out.scenes[0].visual.comparison is None

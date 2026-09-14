@@ -6,7 +6,7 @@ the pipeline. `animate.py` writes a spec to a temp file, points
 import cost and its failure modes out of the render stage entirely, and makes a
 timeout enforceable.
 
-Three templates, and the model may only choose between them and fill their
+Four templates, and the model may only choose between them and fill their
 parameters (`schemas.Comparison`). It never writes animation code: a scene that
 compiles, reads well and matches its narration is hard to generate and
 impossible to check by eye at scale, while four numbers and two labels can be
@@ -30,14 +30,19 @@ import os
 from manim import (
 	DOWN,
 	LEFT,
+	RIGHT,
 	UP,
 	BraceBetweenPoints,
+	Create,
+	Dot,
 	FadeIn,
 	GrowFromCenter,
+	Line,
 	Rectangle,
 	Scene,
 	Text,
 	ValueTracker,
+	VMobject,
 	always_redraw,
 	config,
 	rate_functions,
@@ -132,9 +137,12 @@ class Clip(Scene):
 	def construct(self) -> None:
 		self.camera.background_color = hexof(SPEC.get("bg", (22, 26, 33)))
 		self.add(*self._chrome())
-		{"two_bar": self.two_bar, "count_up": self.count_up, "split": self.split}[
-			SPEC["template"]
-		]()
+		{
+			"two_bar": self.two_bar,
+			"count_up": self.count_up,
+			"split": self.split,
+			"decay_curve": self.decay_curve,
+		}[SPEC["template"]]()
 
 	# --- chrome, matching slides.chrome() --------------------------------
 
@@ -380,4 +388,94 @@ class Clip(Scene):
 			lb.shift(LEFT * lb.width)
 			self.play(FadeIn(lb), run_time=beats.rt(0.5))
 		self._note(beats, pct, SPEC.get("note", ""), left_align=True)
+		self.wait(beats.remainder())
+
+	def decay_curve(self) -> None:
+		"""A value falling step by step, drawn as it falls.
+
+		The one template where the *shape* is the finding. "Success collapses from
+		near-perfect to near-zero within sixteen steps" is a curve, and Ep. 6 spent
+		it on a static number because a curve was not on offer. Drawing it as it
+		falls is the whole point: the viewer watches the decline happen rather than
+		reading its endpoint.
+
+		Geometric between the two endpoints the digest supplies - which is what the
+		papers this fires on actually report - so the curve is determined by
+		`value_a`, `value_b` and `steps` rather than by anything invented here.
+		"""
+		a = float(SPEC["value_a"])
+		b = float(SPEC["value_b"])
+		steps = max(int(float(SPEC.get("steps") or 2)), 2)
+
+		left = x_at(scaled(MARGIN))
+		right = x_at(1920 - scaled(MARGIN))
+		base = y_at(scaled(840))
+		top = y_at(scaled(340))
+		width, height = right - left, top - base
+
+		# Normalised to the starting value, so the curve fills the frame whatever
+		# the units are. A zero or negative start has no ratio to fall along.
+		ratio = (b / a) if a > 0 and b > 0 else 0.0
+		rate = ratio ** (1.0 / steps) if ratio > 0 else 0.0
+
+		def at(x: float) -> list[float]:
+			frac = rate**x if rate > 0 else max(1.0 - x / steps, 0.0)
+			return [left + width * (x / steps), base + height * frac, 0]
+
+		beats = Beats(SPEC["duration"])
+		beats.plan(0.45 + 2.2 + 0.5 + 0.6)
+
+		axis_colour = hexof(SPEC.get("brace", FAINT))
+		axes = [
+			Line([left, base, 0], [right, base, 0], stroke_width=2, color=axis_colour),
+			Line([left, base, 0], [left, top, 0], stroke_width=2, color=axis_colour),
+		]
+		curve = VMobject(stroke_width=7, color=hexof(ACCENT))
+		# Sampled well above the step count: the fall between the first two steps
+		# is the steepest part and a per-step polyline visibly corners there.
+		curve.set_points_smoothly([at(i / 8.0) for i in range(steps * 8 + 1)])
+
+		# Both stacked above the axis rather than beside it: anything at the top
+		# left of the plot area is where the curve starts, and the first render
+		# put the label straight through the y-axis.
+		label = (
+			Text(SPEC["label_a"].upper(), font=REGULAR, font_size=fs(30), color=hexof(DIM))
+			.move_to([left, top + 1.12, 0])
+			.align_to([left, 0, 0], LEFT)
+		)
+		start = (
+			Text(f"{fmt(a)}{SPEC.get('unit', '')}", font=BOLD, font_size=fs(52), color=hexof(FG))
+			.move_to([left, top + 0.46, 0])
+			.align_to([left, 0, 0], LEFT)
+		)
+		end_dot = Dot(at(steps), radius=0.11, color=hexof(ACCENT))
+		end_text = (
+			Text(
+				f"{fmt(b)}{SPEC.get('unit', '')}",
+				font=BOLD,
+				font_size=fs(60),
+				color=hexof(ACCENT),
+			)
+			.next_to(end_dot, UP, buff=0.3)
+			.shift(LEFT * 0.35)
+		)
+		steps_label = Text(
+			f"{fmt(steps)} STEPS", font=REGULAR, font_size=fs(30), color=hexof(DIM)
+		).move_to([right - 0.9, base - 0.45, 0])
+
+		self.add(*axes)
+		self.play(FadeIn(label, shift=UP * 0.12), FadeIn(start), run_time=beats.rt(0.45))
+		self.play(Create(curve), run_time=beats.rt(2.2), rate_func=rate_functions.linear)
+		self.play(FadeIn(end_dot), FadeIn(end_text, shift=UP * 0.1), run_time=beats.rt(0.5))
+		self.add(steps_label)
+		# Not `_note`: under the step count is the frame's bottom edge, where the
+		# progress bar already is. A decaying curve empties its own top right, so
+		# the note goes there instead.
+		if SPEC.get("note"):
+			note = (
+				Text(SPEC["note"], font=REGULAR, font_size=fs(34), color=hexof(DIM))
+				.move_to([right, top + 0.75, 0])
+				.align_to([right, 0, 0], RIGHT)
+			)
+			self.play(FadeIn(note, shift=UP * 0.1), run_time=beats.rt(0.6))
 		self.wait(beats.remainder())

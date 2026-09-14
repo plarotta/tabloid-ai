@@ -1559,6 +1559,236 @@ of the five callouts in that episode, four have animatable structure and one
 fallback to a static callout is a routine path rather than a safety net.
 
 
+
+## D38 - A replayed episode records itself, and episodes have numbers
+
+Two changes to bookkeeping, both prompted by the same week.
+
+**The window marker no longer cares which stage a run started from.** It moved
+only after a `--from fetch` invocation, on the reasoning that a partial replay
+had covered no new window. That is true of `--from script` on a *cached* window
+and false of the case that actually happened: the 2026-08-19 episode was finished
+with `--from script` after the API outage, so nothing recorded it. Eight days
+later the next window opened at **fourteen days and three thousand papers** -
+the `max_papers` cap - instead of eight days and roughly twenty-four hundred,
+and the three papers that episode used were still eligible to be picked again.
+
+What earns the marker is now what always should have: **a packaged episode over
+a real fetch window**, whatever stage the invocation began at. A `--paper`
+rebuild is still excluded, because it covers one paper rather than a window.
+
+Made safe by a second rule: **the marker only moves forward**. Re-rendering an
+old run would otherwise drag coverage backwards over windows already done. The
+papers still join the ledger in that case, because a ledger is a set.
+
+**Episodes are numbered.** YouTube titles are now
+`ML Papers of the Day Ep. N: <title>`, assembled in Stage 9. The prefix is built
+in code rather than asked of the model: a series number is bookkeeping, and a
+model asked to remember which episode this is will eventually get it wrong. `N`
+lives in `state.json` beside the window marker and advances at the same moment
+and for the same reason - one packaged episode over one covered window - so a
+scheduled run numbers itself and a re-render cannot burn the next one's number.
+
+The 70-character limit now covers the prefix too, which costs 28 of them, so the
+episode prompt asks for ~40 characters rather than 70. Over the limit it is the
+written half that is trimmed, never the series name: a viewer scanning a sidebar
+reads the prefix first.
+
+**The number is stamped, not looked up.** Re-packaging reuses whatever the run's
+own `metadata.json` recorded. Read live it would drift - and did, immediately: a
+re-render of the 2026-08-19 episode relabelled it "Ep. 4" from the live counter
+before this was fixed.
+
+## D39 - The two emptiest slides: numbered rows, and a generated ground
+
+Owner review, 2026-08-27: the intro and bullet slides needed work.
+
+**Bullet slides are numbered rows.** A bullet glyph carries no information and
+every deck in the world has one. A number says how many there are and how far
+through them the viewer is, and a hairline between rows gives the block a
+structure the eye can rest on. Rows are measured before they are drawn, so a
+four-line bullet and a two-word one keep the rule centred between them. Same
+words, same place, no cost.
+
+**Title cards can take a generated backdrop.** A title card holds for four
+seconds carrying one line of type and was the emptiest frame in the episode.
+`render.title_backdrops` puts a generated image behind that type.
+
+The editorial constraint is the whole design: **it must never look like
+evidence.** This is a channel about papers, and a generated picture that reads
+as a figure, a chart or a photograph would be taken for one. So the prompt asks
+for abstract texture and bans every representational form by name, and the
+composite then pushes the result back until it is a ground rather than a
+picture - desaturated to 0.35, darkened to 0.62, and under a left-to-right scrim
+that takes the left third almost to flat ground because the type is left-aligned
+and the image is only allowed to show where nothing is written.
+
+Only the title card gets one. An image behind a figure would compete with the
+one thing the format exists to show.
+
+**Cached by prompt hash in the run directory.** Stage 8 is otherwise free and
+gets re-run constantly while tuning; without a cache every re-render would bill.
+With one, only the first render of a run pays.
+
+**Not yet seen.** `OPENAI_API_KEY` is present but empty - it has been for every
+episode so far, which is why D19 chose macOS `say` and then ElevenLabs. So the
+generation path has never returned an image, and the flat card is what episode 4
+ships. The composite was validated against a stand-in; the generator was not.
+Priced at $0.063 an image in `pricing.yaml` (unverified, like the audio table),
+about $0.25 for the four title cards in an episode.
+
+
+
+## D40 - Being rate limited is not the same as a flaky connection
+
+The first attempt at episode 4 failed at Stage 1: arXiv returned 429, the client
+retried five times on its polite-delay schedule - 3, 6, 9, 12, 15 seconds - and
+gave up 45 seconds later having learned nothing. The cause was self-inflicted
+(four window probes in one afternoon while working out what the run would cost),
+but the failure mode is not: a scheduled run that lands during someone else's
+burst would fail exactly the same way, and Stage 1 failing takes the whole
+episode with it.
+
+`request_delay_seconds` is a *politeness* interval - arXiv asks for three seconds
+between requests - and it is the right unit for a dropped connection. **A rate
+limit resets in minutes.** Retrying inside a minute is not a retry; it is asking
+the same question five times and spending the entire budget on the answer.
+
+So the back-off now depends on what failed. A 429 or 503 gets
+`rate_limit_backoff_seconds` doubling per attempt - 30s, 60s, 120s, 240s, capped
+at five minutes - and everything else keeps the linear polite delay. Where the
+server sends `Retry-After`, that wins: it is the server telling us the answer
+rather than us guessing it.
+
+Cost of the lesson: nothing. Stage 1 is free and nothing downstream had run.
+
+
+
+## D41 - The cold open stops after the thread
+
+Owner review of episode 4: the three paper teases are no longer needed.
+
+They were right when D30 wrote them. Since D35 every bridge announces the paper
+it introduces - "The second paper is about learning physics from a single
+video" - so the open was previewing three papers that each get announced again
+moments later. Two accounts of the same three things, the first one out of
+context.
+
+The cold open is now **one scene**: name the series, name the thread the three
+papers share, stop. `cold_open_seconds` goes 21 -> 8. That is about sixteen
+seconds off the episode and the redundancy with it.
+
+What survives is the part the owner asked to keep two reviews ago: the opening
+that says what the series is. It is also the only wrapper scene left, so the
+whole frame around the papers is now one title card and three signposts.
+
+## The OpenAI account has no credits
+
+The key was configured on 2026-08-27 and the first image request came back
+`429 insufficient_quota / credit_balance_exhausted`. `render.title_backdrops` is
+therefore still unexercised end to end: `available()` passes, the request is
+made, and the flat card is drawn - which is the designed path and cost nothing
+to confirm.
+
+Two accounts have now run dry mid-work in eight days. The pattern worth noting is
+that both failed *as designed* only because the failure was cheap: the backdrop
+declines and the render continues, where Anthropic running out mid-Stage-6 took
+a narration bill and a titleless episode with it before D37 made account-level
+failures fatal at the stage boundary.
+
+
+## D43 - A bridge that named the wrong paper, and a word cap nothing could meet
+
+Episode 7's wrapper came back with two of its three bridges introducing the
+wrong paper. The first, over a card reading `01 / 03`, said "Alignment held at
+training time. **Paper two** tests what monitors catch at deployment" - a
+backward reference to a paper that had not played yet. The second introduced
+*The Geometry of Refusal* as "the first paper" while its card read `02 / 03`.
+The third was correct.
+
+**The pairing was never wrong; the prose was.** Each transition carries an
+`into_arxiv_id` and every one of them pointed at the right segment, so the
+schema was satisfied, the code was satisfied, and the chapter cards were right.
+The model had simply written the three lines for a different play order than the
+one it was given - the same order its own `description` field lists, which is
+Geometry first rather than the rank order the segments actually use.
+
+Nothing in the pipeline can catch this. It is D37's `note`-versus-bars problem
+in a second place: a sentence that is false only in relation to what is on
+screen beside it. The defence is reading `episode.md`, which interleaves the
+bridges with the segments in play order precisely so the seam is what gets
+reviewed (D26). That is what found it.
+
+**And the word cap was unmeetable.** `transition_words_max` is computed as
+`transition_seconds / 60 * words_per_minute * 1.25`. At `transition_seconds: 3`
+and 130 wpm that is **8 words**, while the prompt's own worked examples -
+"Perception held, the map did not. Paper two builds the map in code." - run 12 to
+14. Asked for one thing and shown another, the model followed the examples: the
+three bridges came in at 13, 8 and 11 words. Nothing enforces the cap in code, so
+this cost pacing rather than a failure, and it had been true since the examples
+were written.
+
+`transition_seconds` goes **3 -> 6**, which computes a 16-word cap and covers
+both the examples and D35's "one clause on what just settled, then name the
+next". It is read nowhere except when rendering this prompt, so raising it
+changes the next episode's draft and nothing else. Costs about nine seconds.
+
+**Fixing two sentences cost $0.42.** Stage 7 has no per-clip cache, so
+`--from voice` re-narrates all 41 clips to change 122 characters. Episode 7
+therefore reports **$3.2944** against a $4.00 ceiling, with `voice` at 82 calls
+and $0.8477 for two full passes - cumulative per run by design (D23). The render
+was free the second time, because the backdrops cache by prompt hash within the
+run (D39). A content-hashed clip cache in Stage 7 would have made this a cent.
+
+
+## D44 - Fitting the frame, not the template
+
+Owner review of Ep. 7: the visuals are still too robotic. Two specific things
+were, and both were the same mistake - a layout sized for the worst case and
+then used for every case.
+
+**A figure was fitted inside the card rather than given it.** The card ran to
+the same margin as the body text, the paper title took a two-hundred-pixel block
+above it, and `Image.thumbnail` only ever shrinks. A forty-row comparison chart
+therefore arrived at about a third of the frame with no model name legible, which
+is a screenshot of a paper rather than a visual for video. Three changes: the
+card runs to a tighter margin than the type does, because text needs a reading
+margin and a figure only needs to not touch the edge; the title above it is
+smaller; and the figure is scaled to the card in both directions, capped at twice
+native so a raster figure does not turn to porridge.
+
+**And the margin it was saved with is cropped first.** Figures are cropped for a
+page, so a typical one carries an inch of white on every side which was then
+scaled down along with the content it surrounds. `_trim_border` measures ink
+against the corner pixel and crops to it with a thin pad. It is deliberately
+timid - it declines when the crop would be a sliver, and declines again when
+there was nothing worth cropping - because the failure it must not have is
+mistaking a scatter plot on white for a figure that is mostly margin.
+
+**Bullet rows are fitted to the room they have.** The body was a fixed 46px,
+which is the right size for a five-row list and leaves three quarters of the
+frame empty on a two-row one. The size is now the largest at which the rows still
+fit the body box, found by bisection, with the gutter and the row number tracking
+it. A full list lands near where it always did; a short one sets large.
+
+**What this does not fix.** A forty-row chart is still a forty-row chart: it is
+legible now rather than illegible, not simple. Showing less of it would mean
+choosing which rows matter, and nothing in the pipeline can make that choice
+honestly - the model never sees the figure, only its caption (D11), so a crop it
+invented would be a claim about evidence it cannot read. That is the same reason
+D37 lets the model fill a template but never write the drawing.
+
+**One frame in the review was a red herring.** The emptiest slide in Ep. 7 was a
+two-row bullet frame that is not a slide at all but a reveal state: the block
+reserves room for the whole list and fills it a row at a time (D42), so a frame
+grabbed mid-reveal shows a finished layout two thirds unfilled. The fitting above
+makes those states read better, but the emptiness there was the mechanism, not
+the design.
+
+Free. Rendering bills nothing, and the backdrops cache by prompt hash within a
+run (D39), so re-rendering to see any of this cost nothing.
+
+
 ---
 
 ## Deferred — not yet decided
@@ -1587,3 +1817,4 @@ blocks publishing one automatically.
 | 2026-08-13 | `script` | v3 | Length becomes a hard cap (scene limit + per-scene word budget) after v2 ran 50% over three times; Stage 6 now enforces the scene cap in code. Narration shape borrows structure from explainer channels: open on a gap in what the viewer believes, second person, deliberately varied sentence length. No catchphrases. D29, D30. |
 | 2026-08-13 | `episode` | v3 | Names the series ("ML Papers of the Day") and restructures the cold open into three beats — series, shared thread, then the papers. Outro returns to the thread. Resolves §8 Q3. D30. |
 | 2026-08-11 | `episode` | v2 | Adds `transitions`: one bridge line before each paper, including the first. Each is a single spoken sentence that settles what just played and turns toward what is next, plus a two-to-five-word `label` for the card. Carries a ban list, because every obvious phrasing here ("next up", "moving on", numbering the papers) is a dead one, and a worked good/bad example. Backlog note 3, D26. |
+| 2026-09-12 | `episode` | v9 | The cold open grounds the viewer before it argues: `c1` is the series name and nothing else, `c2` is the thesis as a claim, `c3` is the episode's most striking number carrying one clause that hands into the papers. Reverses v8's "never spend the opening frame on the series name" on the owner's review of Ep. 7, which asked for the Ep. 3 shape. The three paper teases stay cut (D41) - every bridge already announces the paper it leads into. D43's `transition_seconds` fix also lands here, so the bridge word cap finally matches the examples beneath it. |

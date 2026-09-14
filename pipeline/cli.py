@@ -164,37 +164,59 @@ def run(
 	_print_cost(report)
 	console.print(f"[green]Artifacts in {ctx.paths.root}[/green]")
 
-	advanced = _advance_window(ctx, from_stage, paper)
+	advanced = _advance_window(ctx, paper)
 	if advanced is not None:
 		console.print(f"[green]Next run's window starts at {advanced:%Y-%m-%d %H:%M} UTC[/green]")
 
 
-def _advance_window(ctx: StageContext, from_stage: str, paper: str | None):
+def _advance_window(ctx: StageContext, paper: str | None):
 	"""Move `state.json` forward, but only after a run that earned it.
 
-	The marker is what stops consecutive runs re-covering the same papers, so it
-	moves only when this invocation actually fetched a window *and* carried it all
-	the way to a packaged episode. A partial replay (`--from script`) or a
-	single-paper run has not covered a new window and must leave it alone.
+	What earns it is a **packaged episode covering a real fetch window** - not the
+	stage this invocation happened to start from. That distinction cost a week:
+	the 2026-08-19 episode was finished with `--from script` after an API outage,
+	the marker stayed where it was, and the next window opened at fourteen days
+	and three thousand papers instead of seven and two thousand (D38).
+
+	A `--paper` rebuild is still excluded: it covers one paper, not a window.
 
 	It moves to the newest submission the fetch actually saw, not to now and not
 	to the requested window end: the minutes a run spends in the LLM stages, and
 	the hours arXiv's index runs behind, would otherwise become permanent holes in
 	coverage (D31).
 
+	**Forward only.** Re-rendering an old run must not drag the marker back over
+	windows that have since been covered, and re-rendering the newest one must be
+	a no-op rather than a rewind.
+
 	The same run also records the papers it used, so a later window that overlaps
 	this one cannot give any of them a second segment (D32).
 	"""
-	from .state import mark_covered, mark_successful_run
+	from .state import (
+		advance_episode_number,
+		last_successful_run,
+		mark_covered,
+		mark_successful_run,
+	)
 
-	if from_stage != "fetch" or paper:
+	if paper:
 		return None
 	if not PackageStage(ctx).is_complete():
 		return None
 	end = FetchStage(ctx).window_end()
 	if end is None:
 		return None
-	mark_successful_run(end)
+	current = last_successful_run()
+	if current is not None and end <= current:
+		# An older or already-recorded window. Its papers are still worth adding
+		# to the ledger, which is a set and cannot go backwards.
+		end = None
+
+	else:
+		mark_successful_run(end)
+		# Only a run that moved the marker gets a number, so re-rendering an old
+		# episode cannot burn the next one's.
+		console.print(f"[green]Packaged as episode {advance_episode_number()}[/green]")
 
 	try:
 		used = [m.arxiv_id for m in ScriptStage(ctx).load().segments]

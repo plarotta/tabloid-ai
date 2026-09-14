@@ -16,10 +16,9 @@ against episode one's 4:51 at 12.1s and episode three's 5:16 at 13.9s — the
 length and pace work of D34/D35, measured on a finished file. It cost **$2.97**
 over a 2,180-paper catch-up window, most of it Stage 2.
 
-**One caveat on that run:** it was finished with `--from script` after the
-Anthropic account ran out of credit mid-run, and a replay deliberately does not
-advance the window marker (D25). So `state.json` does not yet record this
-episode. See [The fetch window](#the-fetch-window).
+Episodes are numbered: YouTube titles read `ML Papers of the Day Ep. N: <title>`,
+with `N` tracked in `state.json` beside the window marker and advanced by the same
+packaged run (D38).
 
 | Stage | Status | Validated against |
 |---|---|---|
@@ -121,12 +120,19 @@ of slack before Stage 10's noon publish slot, which absorbs Actions' cron drift.
 not re-cover the same papers — without it, a Tue/Thu cadence against the 4-day
 fallback window would let one paper headline two consecutive episodes.
 
-It advances only after a run that earned it: a full `fetch`→`package` pass, never
-a `--from <stage>` replay or a `--paper` rebuild. It moves to the **end of the
-fetch window**, not to when the run finished, because the ~10 minutes in between
-would otherwise become a permanent hole in coverage. In Actions it persists
-through the cache; a cache miss falls back to the 4-day window, which overlaps
-rather than breaks (D25).
+It advances after any run that **packaged an episode over a real fetch window** —
+including a `--from script` replay, which is how an episode gets finished after an
+outage. A `--paper` rebuild is excluded, and the marker only ever moves forward, so
+re-rendering an old run cannot drag coverage backwards. It moves to the **end of
+the fetch window**, not to when the run finished, because the ~10 minutes in
+between would otherwise become a permanent hole in coverage.
+
+Getting that wrong is expensive rather than merely untidy: the 2026-08-19 episode
+went unrecorded under the old rule, and the next window opened at **14 days and
+3,000 papers** — the `max_papers` cap — instead of 8 days and ~2,400 (D38).
+
+In Actions it persists through the cache; a cache miss falls back to the 4-day
+window, which overlaps rather than breaks (D25).
 
 ## How it is organised
 
@@ -259,13 +265,12 @@ the standalone segment, which has to be publishable on its own (D26).
 
 ## Known gaps
 
-- **An episode finished by replay does not record itself.** `_advance_window`
-  requires a `--from fetch` run that reaches `package`, so the 2026-08-19
-  episode — finished with `--from script` — left the marker at 2026-08-12 and its
-  three papers out of the covered ledger. That guard is right for a partial
-  rebuild and wrong for a completed episode, and nothing currently tells the two
-  apart. Until it does, a replayed episode needs its coverage recorded by hand
-  when it is published (D32, D35).
+- **Title backdrops have never generated an image.** `render.title_backdrops` is
+  on and a key is now configured, but the OpenAI account has no credits, so the
+  first real request came back `insufficient_quota` and every title card falls
+  back to the flat design. The compositing was validated against a stand-in; the
+  generator has made exactly one live request and it was refused. Add credit and
+  it costs ~$0.25 an episode, cached so re-renders are free (D39).
 - **The runtime projection is good to about ±5%.** It reads the finished length
   off the word count at Stage 6 rather than waiting for Stage 8. The read rate
   moves with how long the words are — 2.33 to 2.45 spoken words a second across

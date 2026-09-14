@@ -32,6 +32,11 @@ class FetchConfig(StrictModel):
 	page_size: int = 200
 	request_delay_seconds: float = 3.0
 	max_retries: int = 5
+	# The first wait after arXiv returns 429, doubling per attempt. Separate from
+	# `request_delay_seconds` because a rate limit resets in minutes and a flaky
+	# connection clears in seconds - retrying a 429 on the polite-delay schedule
+	# just spends the whole retry budget confirming it (D40).
+	rate_limit_backoff_seconds: float = 30.0
 	max_papers: int = 3000
 
 
@@ -117,9 +122,10 @@ class ScriptConfig(StrictModel):
 	# The cold open names the series and the papers' shared thread before teasing
 	# them, so it needs more room than the three flat hooks it used to be (D30).
 	# 18 was never realistic for those beats - the 2026-08-13 open ran to 34s
-	# against it. 21 is what the structure actually costs when each beat is held
-	# to one scene, and the prompt now fixes the scene count to match (D34).
-	cold_open_seconds: int = 21
+	# against it. 21 was what the three-beat structure cost (D34). The three
+	# teases then moved out to the bridges, which announce each paper as it
+	# arrives, leaving one scene: the series name and the thread (D41).
+	cold_open_seconds: int = 8
 	# One bridge line before each paper, including the first. Long enough to land
 	# a sentence, short enough that it reads as punctuation rather than a scene.
 	transition_seconds: int = 5
@@ -143,6 +149,8 @@ class TTSConfig(StrictModel):
 	# is the one that governs how flat the read is. Empty means the voice's own
 	# defaults, which is what the first episodes shipped with.
 	voice_settings: dict = Field(default_factory=dict)
+	# Per-scene nudges to those settings, by what the scene is doing (D42).
+	vary_by_scene: bool = True
 	# Silence appended to every scene's clip, so there is a beat where the slide
 	# changes. Lives in the audio file rather than the render timeline - see
 	# `append_silence` in stages/voice.py.
@@ -188,9 +196,16 @@ class RenderConfig(StrictModel):
 	# reason motion does - the hard-cut path concatenates images and has nowhere
 	# to put a clip.
 	animated_callouts: bool = True
+	# Staged reveals on the ordinary slide types (D42).
+	slide_reveals: bool = True
 	# Per clip. A template takes ~3s at 1080p30; this is the point at which a
 	# scene is not worth waiting for and the still is used instead.
 	animate_timeout_seconds: int = 120
+	# A generated image behind the title cards (D39). Needs OPENAI_API_KEY and the
+	# `openai` extra; without either, or on any failure, the flat card is drawn.
+	# Cached per run by prompt hash, so only the first render of a run pays.
+	title_backdrops: bool = True
+	backdrop_model: str = "gpt-image-1"
 	# Off by default: no licensed track could be sourced, and the synthesised
 	# fallback reads as hum once it is audible. Drop a track at assets/music/ and
 	# enable this. See DECISIONS.md D21.

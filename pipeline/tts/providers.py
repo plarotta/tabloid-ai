@@ -116,7 +116,13 @@ class MacSayTTS(TTSClient):
 		self.default_voice = voice
 		self.rate = rate
 
-	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+	def synthesize(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		settings: dict | None = None,
+	) -> SpeechResult:
 		if not shutil.which("say"):
 			raise TTSError("`say` not found. This provider only works on macOS.")
 		out_path = out_path.with_suffix(self.suffix)
@@ -160,7 +166,13 @@ class OpenAITTS(TTSClient):
 		self.model = model
 		self.default_voice = voice
 
-	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+	def synthesize(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		settings: dict | None = None,
+	) -> SpeechResult:
 		key = os.environ.get("OPENAI_API_KEY")
 		if not key:
 			raise TTSError(
@@ -222,7 +234,13 @@ class ElevenLabsTTS(TTSClient):
 		self.default_voice = voice
 		self.settings = settings or {}
 
-	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+	def synthesize(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		settings: dict | None = None,
+	) -> SpeechResult:
 		key = os.environ.get("ELEVENLABS_API_KEY")
 		if not key:
 			raise TTSError(
@@ -235,8 +253,11 @@ class ElevenLabsTTS(TTSClient):
 		out_path.parent.mkdir(parents=True, exist_ok=True)
 		vid = voice or self.default_voice
 		body: dict = {"text": text, "model_id": self.model}
-		if self.settings:
-			body["voice_settings"] = self.settings
+		# Per-call settings override the client's, so Stage 7 can read a headline
+		# number and a caveat differently without building a second client (D42).
+		per_call = settings or self.settings
+		if per_call:
+			body["voice_settings"] = per_call
 		resp = httpx.post(
 			f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
 			headers={"xi-api-key": key, "accept": "audio/mpeg"},

@@ -29,7 +29,13 @@ class TTSClient(ABC):
 	provider: str
 
 	@abstractmethod
-	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+	def synthesize(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		settings: dict | None = None,
+	) -> SpeechResult:
 		"""Render `text` to an audio file at `out_path` and measure its duration."""
 
 

@@ -229,7 +229,7 @@ class Comparison(StrictModel):
 	scene stays the static callout it is today.
 	"""
 
-	template: Literal["two_bar", "count_up", "split"]
+	template: Literal["two_bar", "count_up", "split", "decay_curve"]
 	# The paper's own value; the one the accent colour is spent on.
 	label_a: str
 	value_a: float
@@ -240,6 +240,9 @@ class Comparison(StrictModel):
 	value_b: float | None = None
 	# A short line under the figure - "10x tokens per parameter". Never a sentence.
 	note: str = ""
+	# `decay_curve` only: how many steps the fall is drawn across. Checked against
+	# the digest like every other value, because the x-axis is a claim too (D42).
+	steps: float | None = None
 
 	@field_validator("label_a", "label_b", "unit", "note", mode="before")
 	@classmethod
@@ -465,6 +468,11 @@ class PackageResult(StrictModel):
 	as the manifest and as the copy-paste source for the YouTube upload form."""
 
 	generated_at: datetime
+	# Which episode of the series this is, stamped on the first packaging and
+	# reused on every later one. Read live from `state.json` it would drift: a
+	# re-render months later would relabel a finished episode with whatever
+	# number the series had reached (D38).
+	episode_number: int | None = None
 	title: str = ""
 	description: str = ""
 	thumbnail_text_options: list[str] = Field(default_factory=list)
@@ -519,7 +527,7 @@ class CallRecord(StrictModel):
 	stage: str
 	provider: str
 	model: str
-	kind: Literal["text", "audio"] = "text"
+	kind: Literal["text", "audio", "image"] = "text"
 	input_units: int
 	output_units: int
 	cost_usd: float

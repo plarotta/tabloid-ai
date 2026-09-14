@@ -48,6 +48,7 @@ class FetchStage(Stage):
 			page_size=cfg.page_size,
 			delay_seconds=cfg.request_delay_seconds,
 			max_retries=cfg.max_retries,
+			rate_limit_backoff_seconds=cfg.rate_limit_backoff_seconds,
 		)
 		try:
 			papers = list(client.search(cfg.categories, start, end, max_papers=cfg.max_papers))
