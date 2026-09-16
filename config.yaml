@@ -3,6 +3,19 @@
 
 fetch:
   categories: [cs.LG, cs.CL, cs.CV, cs.AI, stat.ML]
+  # Which arXiv interface Stage 1 reads (D45).
+  #
+  # `api` is the Atom search endpoint and was the only one until 2026-09-13,
+  # when it began answering every request from this address with 429 and was
+  # still doing so more than a day later. The website, the RSS feeds and the
+  # OAI-PMH endpoint all answered normally throughout, so the block was scoped
+  # to that one endpoint.
+  #
+  # `oai` is the bulk harvester arXiv publishes for exactly this use. It costs
+  # a coarser window - its dates have no time of day, and it filters on when a
+  # record was last modified rather than when it was submitted, so the harvest
+  # nets more and is filtered here. Switch back to `api` when it lets us in.
+  source: oai
   # Fallback window when no previous successful run is recorded.
   fallback_window_days: 4
   # arXiv asks for >=3s between requests. Page size capped by their API.
@@ -155,14 +168,20 @@ tts:
   # Was eleven_turbo_v2_5, which is the latency-optimised model - nothing here
   # needs low latency, and the owner review heard the difference (D28).
   model: eleven_multilingual_v2
-  # ElevenLabs "Adam". Episodes 1-5 were "Bella" (EXAVITQu4vr4xnSDxMaL), chosen
-  # from the samples in runs/_voice_samples/elevenlabs/ after both macOS engines
-  # were rejected as robotic (DECISIONS.md D22). Swapped for episode 5 to hear a
-  # different read of the same format; both are from that same sampled set, so
-  # reverting is one line. voice_settings below are unchanged from D28's tuning.
-  # Measured: Adam reads at 2.12 words/sec (127 wpm) against Bella's 2.33-2.45,
-  # so the Stage 6 runtime projection under-reads a finished episode by ~13%.
-  voice: pNInz6obpgDQGcFmaJgB
+  # ElevenLabs "Antoni", from Ep. 8. Episodes 1-5 were "Bella"
+  # (EXAVITQu4vr4xnSDxMaL) and 6-7 were "Adam" (pNInz6obpgDQGcFmaJgB); all three
+  # come from the same sampled set in runs/_voice_samples/, chosen after both
+  # macOS engines were rejected as robotic (DECISIONS.md D22), so swapping is one
+  # line. Adam went because the owner heard it as too Southern (review of Ep. 7).
+  # voice_settings below are unchanged from D28's tuning.
+  #
+  # Pace: on the same sample line Antoni came in 12% faster than Adam. Adam's
+  # long-form rate was measured at 2.12 words/sec (127 wpm) off a finished
+  # episode, which is where `script.words_per_minute: 130` comes from. That
+  # number is deliberately NOT being retuned off a seven-second sample - so
+  # expect Ep. 8 to land shorter than Stage 6 projects rather than longer, which
+  # is the safe direction (D34), and set the rate from the finished file.
+  voice: ErXwobaYiN019PkySvjV
   # Never sent before D28, so every read ran at the voice's flat defaults.
   # Lower stability is what buys variation across a five-minute narration.
   voice_settings:

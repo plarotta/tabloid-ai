@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from ..arxiv import ArxivClient
+from ..oai import OaiClient
 from ..paths import read_json, read_jsonl, write_json, write_jsonl
 from ..schemas import Paper
 from ..stage import Stage, StageError
@@ -38,22 +39,38 @@ class FetchStage(Stage):
 		start, end = self.window()
 		cfg = self.config.fetch
 		log.info(
-			"Fetching %s from %s to %s",
+			"Fetching %s from %s to %s via %s",
 			", ".join(cfg.categories),
 			start.isoformat(timespec="minutes"),
 			end.isoformat(timespec="minutes"),
+			cfg.source,
 		)
 
-		client = ArxivClient(
-			page_size=cfg.page_size,
-			delay_seconds=cfg.request_delay_seconds,
-			max_retries=cfg.max_retries,
-			rate_limit_backoff_seconds=cfg.rate_limit_backoff_seconds,
-		)
-		try:
-			papers = list(client.search(cfg.categories, start, end, max_papers=cfg.max_papers))
-		finally:
-			client.close()
+		# Two interfaces, same output. `api` is the Atom search endpoint; `oai` is
+		# the bulk harvester it fell back to when that endpoint began refusing this
+		# address for days at a time (D45). The switch stays in config rather than
+		# being decided here, because which one works is a property of the day.
+		if cfg.source == "oai":
+			oai = OaiClient(
+				delay_seconds=cfg.request_delay_seconds,
+				max_retries=cfg.max_retries,
+				rate_limit_backoff_seconds=cfg.rate_limit_backoff_seconds,
+			)
+			try:
+				papers = list(oai.harvest(cfg.categories, start, end, max_papers=cfg.max_papers))
+			finally:
+				oai.close()
+		else:
+			client = ArxivClient(
+				page_size=cfg.page_size,
+				delay_seconds=cfg.request_delay_seconds,
+				max_retries=cfg.max_retries,
+				rate_limit_backoff_seconds=cfg.rate_limit_backoff_seconds,
+			)
+			try:
+				papers = list(client.search(cfg.categories, start, end, max_papers=cfg.max_papers))
+			finally:
+				client.close()
 
 		if not papers:
 			raise StageError(

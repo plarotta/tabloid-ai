@@ -143,6 +143,8 @@ re-runs possible and what keeps development from re-spending on upstream stages.
 ```
 pipeline/
   arxiv.py       Atom API client (rate limiting, paging, de-duplication)
+  oai.py         OAI-PMH bulk harvester, the fallback when the Atom
+                 endpoint refuses us; `fetch.source` picks one (D45)
   eprint.py      e-print download + safe unpacking (tar/gz/pdf)
   latex.py       figure, caption and section extraction from LaTeX source
   figures.py     figure normalisation to raster; PDF-embedded-image fallback
@@ -278,6 +280,16 @@ the standalone segment, which has to be publishable on its own (D26).
 - **Stage 2's $1.00 target is not a fixed number.** It cost $1.03 on a 3.6-day
   window and $1.63 on a 7.4-day one, because it scores every paper in the window
   (D15, D34). The target wants to scale with the window, or be dropped.
+- **The Atom search endpoint blocked this address for over a day.** It began
+  answering every request with 429 on 2026-09-13 and had not relented 24 hours
+  later, while the website, the RSS feeds and OAI-PMH all answered normally.
+  Stage 1 now has a second interface and `fetch.source` chooses; the config
+  ships pointed at `oai`. The block was probably self-inflicted, because each
+  failed run fires four retries at a server that already refused (D45).
+- **The harvest scans far more than it keeps.** OAI-PMH filters on when a
+  record was last modified, not when it was submitted, and its sets are coarse,
+  so the first live run scanned 10,160 records to keep 2,342. It is free and
+  takes a few minutes; it costs nothing at Stage 2, which only sees survivors.
 - **A run during an arXiv index stall fails loudly** rather than skipping papers
   (D31). That is the right trade, but a scheduled run can fail for reasons that
   have nothing to do with this code — as it did on 2026-08-13.

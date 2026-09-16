@@ -640,16 +640,13 @@ def figure_slide(
 	# margin; a figure only needs to not touch the edge, and every pixel given
 	# back here is a pixel of figure (owner, Ep. 7).
 	fm = ctx.scaled(72)
-	card = [fm, top, ctx.width - fm, bottom]
-	d.rounded_rectangle(
-		card, radius=ctx.scaled(18), fill=CARD, outline=FAINT, width=max(ctx.scaled(2), 1)
-	)
-
 	pad = ctx.scaled(32)
 	attr_h = ctx.scaled(40)
-	inner_w = max(card[2] - card[0] - 2 * pad, 1)
-	inner_h = max(card[3] - card[1] - 2 * pad - attr_h, 1)
+	max_card = [fm, top, ctx.width - fm, bottom]
+	inner_w = max(max_card[2] - max_card[0] - 2 * pad, 1)
+	inner_h = max(max_card[3] - max_card[1] - 2 * pad - attr_h, 1)
 
+	fig = None
 	try:
 		fig = Image.open(figure_path)
 		if fig.mode in ("RGBA", "LA", "P"):
@@ -671,15 +668,46 @@ def figure_slide(
 				(max(int(fig.width * scale), 1), max(int(fig.height * scale), 1)),
 				Image.LANCZOS,
 			)
+	except Exception as e:
+		log.warning("Could not place figure %s: %s", figure_path, e)
+		fig = None
+
+	# **The card is cut to the figure, not the other way round.** A portrait
+	# figure scaled to a landscape card is limited by height, and the card then
+	# carries two columns of blank white either side of it - which reads as a
+	# mistake rather than as a margin. Sizing the card to what it holds keeps the
+	# figure exactly as large as it was and removes the emptiness around it.
+	# Floored at the width the attribution line needs, since that is burned into
+	# the card and must not wrap (Ep. 8).
+	af = regular(ctx.scaled(25))
+	attr_w = d.textlength(attribution or "", font=af) + 2 * pad
+	if fig is not None:
+		card_w = max(int(fig.width) + 2 * pad, int(attr_w), ctx.scaled(360))
+		card_h = int(fig.height) + 2 * pad + attr_h
+	else:
+		card_w = max_card[2] - max_card[0]
+		card_h = max_card[3] - max_card[1]
+	card_w = min(card_w, max_card[2] - max_card[0])
+	card_h = min(card_h, max_card[3] - max_card[1])
+	# Centred horizontally; hung from the top of the space the card may use, so a
+	# short figure does not float in the middle of the frame with the title
+	# stranded above it.
+	cx = (ctx.width - card_w) // 2
+	card = [cx, top, cx + card_w, top + card_h]
+
+	d.rounded_rectangle(
+		card, radius=ctx.scaled(18), fill=CARD, outline=FAINT, width=max(ctx.scaled(2), 1)
+	)
+
+	if fig is not None:
 		img.paste(
 			fig,
 			(
-				card[0] + pad + (inner_w - fig.width) // 2,
-				card[1] + pad + (inner_h - fig.height) // 2,
+				card[0] + (card_w - fig.width) // 2,
+				card[1] + pad,
 			),
 		)
-	except Exception as e:
-		log.warning("Could not place figure %s: %s", figure_path, e)
+	else:
 		d.text(
 			(card[0] + pad, card[1] + pad),
 			"[figure unavailable]",
@@ -691,13 +719,14 @@ def figure_slide(
 	d.text(
 		(card[0] + pad, card[3] - ctx.scaled(42)),
 		attribution,
-		font=regular(ctx.scaled(25)),
+		font=af,
 		fill=(112, 112, 112),
 	)
-	# Reserved either way (`bottom` is already measured for it), so withholding
-	# the caption for one state moves nothing but the caption.
+	# Sits under the card rather than at a fixed height, because the card is now
+	# cut to its figure and a short one ends well above `bottom`. Measured either
+	# way, so withholding it for one reveal state moves nothing but the caption.
 	if cap and reveal:
-		d.text((m, bottom + ctx.scaled(22)), cap, font=cf, fill=DIM)
+		d.text((m, card[3] + ctx.scaled(22)), cap, font=cf, fill=DIM)
 
 	chrome(d, ctx)
 	return img

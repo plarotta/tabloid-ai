@@ -1785,8 +1785,88 @@ grabbed mid-reveal shows a finished layout two thirds unfilled. The fitting abov
 makes those states read better, but the emptiness there was the mechanism, not
 the design.
 
+**Ep. 8 addendum: the card is cut to the figure.** Giving the card the frame
+fixed the landscape figures and created a new fault on the portrait ones. A tall
+heatmap scaled into a wide card is limited by height, so it arrived the right
+size with two columns of blank white beside it - which reads as a mistake rather
+than as a margin. The card is now sized to what it holds and centred, floored at
+the width the burned-in attribution needs so that line cannot wrap. The figure is
+not any larger for this; the emptiness around it is simply gone. The caption
+moved with it, from a fixed height to just under the card, since a short card no
+longer reaches where the caption used to sit.
+
 Free. Rendering bills nothing, and the backdrops cache by prompt hash within a
 run (D39), so re-rendering to see any of this cost nothing.
+
+
+## D45 - A second way in, and the field that would have lied about it
+
+On 2026-09-13 the arXiv Atom search API began answering every request from this
+address with 429, and was still doing so more than a day later. Three attempts
+spread over ninety minutes all failed, including one after a full hour of
+silence. The website, the RSS feeds and the OAI-PMH endpoint answered normally
+throughout, and arXiv's own status page reported no incident, so the block was
+scoped to that one endpoint rather than to arXiv or to us being offline.
+
+Worth recording about the block itself: a request naming this pipeline got an
+immediate, polite 429, while the same request wearing a browser user agent was
+dropped without a reply. Identifying yourself is treated *better*. The
+temptation to disguise the client is both evasion and worse-performing.
+
+**The cause was probably us, and the retry policy is why.** Each failed run
+fires five requests, four of them retries against a server that already said no.
+Three runs is fifteen refusals ignored. D40 reasoned that a rate limit resets in
+minutes, so waiting it out inside one invocation is the right move; this block
+outlived every backoff we could do in-process, which turns each attempt into a
+deeper hole. The policy is unchanged for now, but the assumption behind it is
+not safe.
+
+**So Stage 1 has two interfaces**, chosen by `fetch.source`. `api` is the Atom
+search endpoint. `oai` is OAI-PMH, which is what arXiv publishes for bulk
+harvesting and is closer to what Stage 1 actually does than a search query is.
+The switch stays in config because which one works is a property of the day.
+
+### The field that would have lied
+
+OAI-PMH offers two metadata formats and the obvious one is a trap.
+
+`metadataPrefix=arXiv` carries a `<created>` field that reads like the
+submission date. It is not. On a single live harvest of 960 records it
+disagreed with the paper's own identifier **331 times**, and the disagreements
+were not rounding: `1912.08786` is a December 2019 paper and the field read
+`2026-09-10`, the date of its sixth version. `2210.11003` is from October 2022
+and read `2026-09-11`.
+
+A window filtered on that field would have presented years-old papers as this
+week's research - silently, with every number in the segment still correct and
+traceable. This channel survives on exactly one thing being true, and that is
+the failure it cannot have.
+
+`metadataPrefix=arXivRaw` lists every version with its own timestamp, so v1's
+date is the submission. It also carries a time of day, where `created` is a bare
+date, which keeps the window marker at the precision D31 built it for instead of
+dropping it to whole days. The trap is now a test: the fixture pairs a real
+September 2026 submission with that 2019 paper and asserts the old one cannot
+land in a September window.
+
+### What the harvest costs
+
+**It nets far more than it keeps.** `from`/`until` filter on the record's
+datestamp - when it was last touched - so a range returns everything modified in
+it, including 2013 papers whose metadata was corrected. Sets are coarse too
+(`cs`, `stat`), so the five configured categories are filtered here rather than
+by the server. The first live run scanned **10,160 records to keep 2,342**.
+
+**Announcement lags submission.** A paper submitted today may not be announced
+for a day or more, so a window is never complete up to the clock. The marker
+follows the newest paper actually seen, which is the rule D31 already
+established for index lag on the other endpoint. On the first run the frontier
+landed 9.9 hours back, better than the three days the sample had suggested.
+
+**The two interfaces agree on volume**, which is the check that matters: 316
+papers a day here against 323 a day from the Atom endpoint for Ep. 7. Cost is
+unchanged - Stage 2 only ever sees what survives the filter - and the harvest
+itself is free.
 
 
 ---

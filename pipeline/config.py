@@ -28,6 +28,10 @@ class ModelSpec(StrictModel):
 
 class FetchConfig(StrictModel):
 	categories: list[str]
+	# Which arXiv interface Stage 1 reads. `api` is the Atom search endpoint;
+	# `oai` is the OAI-PMH bulk harvester, which is what the pipeline fell back
+	# to when the search endpoint started refusing this address (D45).
+	source: Literal["api", "oai"] = "api"
 	fallback_window_days: int = 4
 	page_size: int = 200
 	request_delay_seconds: float = 3.0

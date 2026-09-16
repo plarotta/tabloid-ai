@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+    <responseDate>2026-09-15T00:00:00Z</responseDate>
+    <request verb="ListRecords" metadataPrefix="arXivRaw" set="cs">http://oaipmh.arxiv.org/oai</request>
+    <ListRecords>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:2609.05999</identifier>
+        <datestamp>2026-09-14</datestamp>
+            <setSpec>cs:cs:DL</setSpec>
+    </header>
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/">
+        <id>2609.05999</id>
+        <submitter>A Person</submitter>
+            <version version="v1">
+                <date>Sat, 05 Sep 2026 09:00:00 GMT</date>
+                <size>100kb</size>
+            </version>
+        <title>A digital libraries paper</title>
+        <authors>Ada Lovelace, Alan Turing and Grace Hopper</authors>
+        <categories>cs.DL</categories>
+        <abstract>Not one of the five configured categories.</abstract>
+    </arXivRaw>
+            </metadata>
+        </record>
+<record>
+                <header status="deleted">
+        <identifier>oai:arXiv.org:2609.99999</identifier>
+        <datestamp>2026-09-14</datestamp>
+    </header>
+        </record>
+        <resumptionToken completeListSize="4" cursor="2"></resumptionToken>
+    </ListRecords>
+</OAI-PMH>

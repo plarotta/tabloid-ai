@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+    <responseDate>2026-09-15T00:00:00Z</responseDate>
+    <request verb="ListRecords" metadataPrefix="arXivRaw" set="cs">http://oaipmh.arxiv.org/oai</request>
+    <ListRecords>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:2609.05801</identifier>
+        <datestamp>2026-09-14</datestamp>
+            <setSpec>cs:cs:AI</setSpec>
+            <setSpec>cs:cs:LG</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>2609.05801</id>
+        <submitter>Mohammad Panahazari</submitter>
+            <version version="v1">
+                <date>Sat, 05 Sep 2026 01:28:43 GMT</date>
+                <size>101kb</size>
+            </version>
+        <title>Evidence-Aligned Local Composition of Discrete Experts for Sequence Restoration</title>
+        <authors>Mohammad Panahazari, Usman A. Khan, Shuchin Aeron</authors>
+        <categories>cs.AI cs.LG</categories>
+            <license>http://creativecommons.org/licenses/by/4.0/</license>
+            <abstract>A document modeled as a discrete sequence of tokens can be thought of as being generated from a composition of texts from different domains; a README file, for example, moves between prose, code, and configuration. When such a document is corrupted and only frozen domain experts are available, restoring it requires deciding both what is missing and which expert to trust at each position, at test time and without region labels or a trained router. We introduce evidence-aligned local composition, which infers a soft, position-wise weighting over the experts from the marginal evidence of the corrupted observation under a given corruption model, estimating the evidence from the experts&#39; own denoising losses and smoothing the weights across positions. Because the weighting is soft, it recovers a mixture when the true composition is mixed and concentrates on one expert when that suffices. Across a categorical simulator, byte-level experts, and experts fine-tuned from a $1.3$B discrete flow-matching model, the inferred weights track the true regions at $0.85$ field accuracy on naturally mixed scientific documents, and at $0.98$ on constructed mixtures whose regions are lexically disjoint. Restoration improves over a single global weight when the experts are genuinely distinct and reduces to it when they converge, tracking a measure of expert separation.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:1912.08786</identifier>
+        <datestamp>2026-09-14</datestamp>
+            <setSpec>cs:cs:CY</setSpec>
+            <setSpec>cs:cs:AI</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>1912.08786</id>
+        <submitter>Thomas Bartz-Beielstein</submitter>
+            <version version="v1">
+                <date>Wed, 18 Dec 2019 18:36:20 GMT</date>
+                <size>2722kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v2">
+                <date>Wed, 08 Apr 2026 18:59:51 GMT</date>
+                <size>539kb</size>
+            </version>
+            <version version="v3">
+                <date>Fri, 14 Aug 2026 17:50:57 GMT</date>
+                <size>547kb</size>
+            </version>
+            <version version="v4">
+                <date>Mon, 24 Aug 2026 17:04:33 GMT</date>
+                <size>79kb</size>
+            </version>
+            <version version="v5">
+                <date>Wed, 02 Sep 2026 16:45:35 GMT</date>
+                <size>121kb</size>
+            </version>
+            <version version="v6">
+                <date>Thu, 10 Sep 2026 17:48:55 GMT</date>
+                <size>20309kb</size>
+            </version>
+        <title>Why we need an AI-resilient society- Profiling Large Language Models</title>
+        <authors>Thomas Bartz-Beielstein and Eva Bartz</authors>
+        <categories>cs.CY cs.AI</categories>
+            <comments>Version 6. 58 pages. For associated TEDx video, see https://youtu.be/f6c2ngp7rqY</comments>
+            <acm-class>68T01 (Primary) 01A80 (Secondary)</acm-class>
+            <msc-class>68T01 (Primary) 01A80 (Secondary)</msc-class>
+            <license>http://creativecommons.org/licenses/by-nc-sa/4.0/</license>
+            <abstract>Three generations of software have transformed the role of artificial intelligence in society. In the first, programmers wrote explicit logic. In the second, neural networks learned programs from data. In the third, large language models turn natural language itself into a programming interface. These shifts reach far beyond computer science, reshaping how societies generate knowledge, make decisions, and govern themselves. While generative adversarial networks introduced the era of deepfakes and synthetic media, large language models have added a new class of systemic risks. This report performs &#34;mindhunting&#34; for LLMs by applying a forensic-psychology profiling methodology to characterize AI based on documented features, e.g., hallucinations, bias and toxicity, sycophancy, fabrication and confabulation, knowledge without understanding, discontinuity and the inability to learn from experience, jagged intelligence, shortcuts and fractured representations. The resulting profile reveals an &#34;entity&#34; that confabulates fluently, amplifies its users&#39; biases, possesses encyclopedic recall without causal understanding, and erodes the competence of those who depend on it. The implications extend to institutional erosion across law, academia, journalism, and democratic governance. To address these challenges, this report proposes a four-pillar framework for AI resilience: (i) cognitive sovereignty, which preserves the capacity for independent judgment, (ii) measurable control, which translates ethical commitments into enforceable standards and red lines, (iii) partial autonomy, which maintains human agency at critical decision points, and (iv) openness to guarantee transparency and accessibility (open-source, open-access, and open-data). This report is an updated and extended version of arXiv:1912.08786v1.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+        <resumptionToken completeListSize="4" cursor="0">TOKEN-PAGE-2</resumptionToken>
+    </ListRecords>
+</OAI-PMH>
