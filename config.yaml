@@ -54,17 +54,11 @@ extract:
 script:
   stage_model: script
   max_concurrency: 3
-  # Spec Stage 6: 60-90s per paper segment at ~150 words per minute - but the
-  # voice reads at 140-147, so a segment that hits this budget exactly still
-  # runs long. 70 is what puts the finished episode at ~4:46 (D34).
-  target_segment_seconds: 70
-  # Scenes are pace, words are length - the two knobs D29 conflated. A scene is
-  # a slide, so more scenes at the same word count is a faster cut, not a longer
-  # episode. Episode one ran 7-8 scenes a segment; 6 parked each slide on screen
-  # for 13.9s and saved nothing (D34). The max is enforced in code, the min is
-  # asked for in the prompt - there is no safe way to invent a scene.
-  min_scenes_per_segment: 7
-  max_scenes_per_segment: 8
+  # ~162 words, spread across short hooks and longer explanations. The measured
+  # voice is slightly slower than this writing budget; review reports both.
+  target_segment_seconds: 65
+  min_scenes_per_segment: 9
+  max_scenes_per_segment: 11
   # Over budget by more than this and the segment (or the cold open) is sent
   # back for a shorter draft. Asking a model to *only* shorten works where
   # stating a budget alongside everything else never has (D34). One extra call
@@ -73,12 +67,11 @@ script:
   # Passes per part. One took the worst segment 279 -> 242 words against 175:
   # short of the budget but still moving, so it gets one more go.
   condense_max_passes: 2
-  # Three beats - series name plus shared thread, then one tease per paper - at
-  # one scene each. 18 was never enough for that and the open ran to 34s (D34).
-  cold_open_seconds: 21
-  # One bridge line before each paper, including the first.
-  transition_seconds: 5
-  # The thread the cold open named, then the sign-off. Two scenes.
+  # Two beats: tension, then promise. Branding is visible, not read aloud.
+  cold_open_seconds: 9
+  # Paper one starts immediately. Later papers get one brief, plain signpost.
+  transition_seconds: 3
+  # Retained for cached scripts; the current wrapper does not write an outro.
   outro_seconds: 10
   words_per_minute: 150
 
@@ -130,6 +123,8 @@ models:
 # openai (and add a key) for a hosted neural voice - the interface is unchanged.
 tts:
   provider: elevenlabs
+  # Send neighboring sentences as context so each scene does not reset the read.
+  contextual_delivery: true
   # Was eleven_turbo_v2_5, which is the latency-optimised model - nothing here
   # needs low latency, and the owner review heard the difference (D28).
   model: eleven_multilingual_v2
@@ -144,24 +139,25 @@ tts:
     similarity_boost: 0.75
     style: 0.30
     use_speaker_boost: true
-  # A beat at every scene change, added to the clip itself.
-  scene_gap_seconds: 0.35
-  # The rest after a bridge line, before the next paper starts. The bridge is a
-  # plain signpost now, so this pause is what marks the seam (D35).
-  bridge_pause_seconds: 1.0
+  # Continuous explanation with longer rests only where a scene requests one.
+  scene_gap_seconds: 0.14
+  bridge_pause_seconds: 0.30
   words_per_minute: 150
 
 # Stage 8. Engine decision deferred to Phase 4 (see DECISIONS.md D6).
 render:
+  # Timed typography, mechanism builds and evidence charts, using Pillow/ffmpeg.
+  # `classic` retains the original slide and optional Manim renderer.
+  visual_style: editorial
   width: 1920
   height: 1080
   fps: 30
   codec: h264
   # Cross-dissolve between scenes; runtime is preserved (see DECISIONS.md D21).
-  crossfade_seconds: 0.4
+  crossfade_seconds: 0.16
   # Cross-dissolve at the seams between parts. Costs a re-encode of the episode
   # (a filtergraph rules out the stream-copy concat); 0 restores it.
-  episode_crossfade_seconds: 0.6
+  episode_crossfade_seconds: 0.24
   # Burn the narration into the frame. Built and validated, then turned off on
   # the owner's review of the result (D33). Reserves the bottom ~16% of every
   # slide, which is the part that has to be reconsidered before this goes on.

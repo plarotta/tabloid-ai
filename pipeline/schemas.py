@@ -214,7 +214,11 @@ class ExtractResult(StrictModel):
 # --- Stage 6: script (SceneManifest) -----------------------------------------
 
 
-VisualType = Literal["title_card", "figure", "bullet_slide", "result_callout", "transition"]
+VisualType = Literal[
+	"title_card", "figure", "bullet_slide", "result_callout", "transition", "process", "contrast"
+]
+
+StoryBeat = Literal["hook", "context", "mechanism", "evidence", "caveat", "payoff"]
 
 
 class Comparison(StrictModel):
@@ -232,12 +236,12 @@ class Comparison(StrictModel):
 	template: Literal["two_bar", "count_up", "split"]
 	# The paper's own value; the one the accent colour is spent on.
 	label_a: str
-	value_a: float
+	value_a: float = Field(allow_inf_nan=False)
 	unit: str = ""
 	# The value being compared against. `two_bar` requires it; the others ignore
 	# it. This is what BASE exists for (D36).
 	label_b: str = ""
-	value_b: float | None = None
+	value_b: float | None = Field(default=None, allow_inf_nan=False)
 	# A short line under the figure - "10x tokens per parameter". Never a sentence.
 	note: str = ""
 
@@ -294,6 +298,8 @@ class Visual(StrictModel):
 	# Only ever read for a `result_callout`, and only when render.animated_callouts
 	# is on. See D36.
 	comparison: Comparison | None = None
+	# A specific table/figure/section from the digest, shown beside the evidence.
+	source: str = ""
 
 
 class Scene(StrictModel):
@@ -303,6 +309,10 @@ class Scene(StrictModel):
 	# The script model's own guess. Stage 8 must build its timeline from measured
 	# audio durations instead (spec Stage 7); this is only for pacing the script.
 	est_seconds: float = Field(gt=0)
+	# Optional so cached scripts remain valid. Direction is metadata, never speech.
+	beat: StoryBeat | None = None
+	# None uses the configured default; zero is a deliberate continuous cut.
+	pause_after: float | None = Field(default=None, ge=0, le=1.2, allow_inf_nan=False)
 
 
 class SceneManifest(StrictModel):
@@ -375,6 +385,15 @@ class ScriptResult(StrictModel):
 	generated_at: datetime
 	segments: list[SceneManifest]
 	episode: EpisodeMetadata
+
+	def transition_manifest(self, transition: Transition) -> SceneManifest:
+		"""Chapter numbers follow papers, while cached bridge scene ids stay stable."""
+		order = [s.arxiv_id for s in self.segments]
+		bridge_ids = [t.into_arxiv_id for t in self.episode.transitions]
+		manifest = transition.manifest(bridge_ids.index(transition.into_arxiv_id), len(order))
+		paper_index = order.index(transition.into_arxiv_id)
+		manifest.scenes[0].visual.highlight = f"{paper_index + 1:02d} / {len(order):02d}"
+		return manifest
 
 	@property
 	def est_seconds(self) -> float:

@@ -93,19 +93,34 @@ class VoiceStage(Stage):
 		out_dir = self.paths.stage_dir("voice") / label
 		scenes: list[SceneAudio] = []
 
-		for scene in manifest.scenes:
+		spoken = [s for s in manifest.scenes if s.narration.strip()]
+		for i, scene in enumerate(spoken):
 			text = scene.narration.strip()
 			if not text:
 				log.warning("%s/%s: empty narration; skipping", label, scene.id)
 				continue
-			result = client.synthesize(
-				text, out_dir / scene.id, voice=self.config.tts.voice or None
-			)
+			contextual = getattr(client, "synthesize_with_context", None)
+			if self.config.tts.contextual_delivery and contextual is not None:
+				result = contextual(
+					text,
+					out_dir / scene.id,
+					voice=self.config.tts.voice or None,
+					previous_text=spoken[i - 1].narration if i else "",
+					next_text=spoken[i + 1].narration if i + 1 < len(spoken) else "",
+				)
+			else:
+				result = client.synthesize(
+					text, out_dir / scene.id, voice=self.config.tts.voice or None
+				)
 			# A beat between scenes. The slide changes here too, so the pause is
 			# a visual rest as much as an audible one. Bridges pass a longer one:
 			# a signpost line followed by silence is the whole seam now (D35).
 			duration = result.duration_seconds
-			pause = self.config.tts.scene_gap_seconds if gap is None else gap
+			pause = scene.pause_after
+			if pause is None:
+				pause = self.config.tts.scene_gap_seconds
+			if gap is not None:
+				pause = gap
 			if pause > 0 and shutil.which("ffmpeg"):
 				duration = append_silence(result.audio_path, pause, duration)
 			elif pause > 0:
@@ -170,11 +185,13 @@ class VoiceStage(Stage):
 			if not self.ctx.paper_filter:
 				if script.episode.cold_open:
 					cold = self._narrate(client, script.episode.cold_open, "cold_open")
-				total = len(script.episode.transitions)
-				for i, t in enumerate(script.episode.transitions):
+				for t in script.episode.transitions:
 					label = f"transition_{t.into_arxiv_id.replace('/', '_')}"
 					audio = self._narrate(
-						client, t.manifest(i, total), label, self.config.tts.bridge_pause_seconds
+						client,
+						script.transition_manifest(t),
+						label,
+						self.config.tts.bridge_pause_seconds,
 					)
 					# `manifest()` reports "episode"; re-key to the paper it leads
 					# into so Stages 8 and 9 can place it.

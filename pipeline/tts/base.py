@@ -32,6 +32,18 @@ class TTSClient(ABC):
 	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
 		"""Render `text` to an audio file at `out_path` and measure its duration."""
 
+	def synthesize_with_context(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		*,
+		previous_text: str = "",
+		next_text: str = "",
+	) -> SpeechResult:
+		"""Providers may use adjacent sentences for continuity; the default is unchanged."""
+		return self.synthesize(text, out_path, voice)
+
 
 def build_tts_client(provider: str | None, model: str | None = None) -> TTSClient:
 	raise NotImplementedError(

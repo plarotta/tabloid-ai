@@ -143,6 +143,8 @@ class TTSConfig(StrictModel):
 	# is the one that governs how flat the read is. Empty means the voice's own
 	# defaults, which is what the first episodes shipped with.
 	voice_settings: dict = Field(default_factory=dict)
+	# Supported by ElevenLabs. Other providers keep their normal synthesize path.
+	contextual_delivery: bool = True
 	# Silence appended to every scene's clip, so there is a beat where the slide
 	# changes. Lives in the audio file rather than the render timeline - see
 	# `append_silence` in stages/voice.py.
@@ -158,6 +160,9 @@ class TTSConfig(StrictModel):
 
 
 class RenderConfig(StrictModel):
+	# Old config files retain their established rendering. The shipped config
+	# opts into editorial: timed builds without Manim, captions, or camera zooms.
+	visual_style: Literal["classic", "editorial"] = "classic"
 	width: int = 1920
 	height: int = 1080
 	fps: int = 30

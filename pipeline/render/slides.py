@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -115,6 +116,11 @@ _REGULAR = [
 
 
 def _font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
+	return _cached_font(tuple(candidates), max(size, 1))
+
+
+@lru_cache(maxsize=128)
+def _cached_font(candidates: tuple[str, ...], size: int) -> ImageFont.FreeTypeFont:
 	for path in candidates:
 		if Path(path).exists():
 			try:
@@ -216,7 +222,9 @@ def fit_text(
 	while size > min_size:
 		font = _font(candidates, size)
 		lines = wrap(draw, text, font, max_width)
-		if len(lines) * (size * 1.26) <= max_height:
+		if len(lines) * (size * 1.26) <= max_height and all(
+			draw.textlength(line, font=font) <= max_width for line in lines
+		):
 			return font, lines
 		size -= 4
 	font = _font(candidates, min_size)
@@ -534,6 +542,9 @@ def figure_slide(
 def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
 	"""Dispatch a SceneManifest visual to its slide type."""
 	vtype = visual.type
+	if vtype in {"process", "contrast"}:
+		# A readable fallback when replaying a new script with the classic style.
+		return bullet_slide(ctx, visual.title or "", visual.bullets)
 	if vtype == "transition":
 		return transition_card(ctx, visual.title or "", visual.highlight or "")
 	if vtype == "figure" and visual.figure_file and ctx.figures_dir:
