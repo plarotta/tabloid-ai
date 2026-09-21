@@ -87,21 +87,33 @@ class AnimatedCallout(Scene):
 		left = x_at(MARGIN_PX)
 
 		# --- chrome, identical to slides.chrome() ---------------------------
-		eyebrow = Text(
-			"Abra: Scaling Diffusion Image Training", font=REGULAR, font_size=fs(26), color=DIM
-		).move_to([0, y_at(74 + 13), 0]).align_to([left, 0, 0], LEFT)
+		eyebrow = (
+			Text(
+				"Abra: Scaling Diffusion Image Training", font=REGULAR, font_size=fs(26), color=DIM
+			)
+			.move_to([0, y_at(74 + 13), 0])
+			.align_to([left, 0, 0], LEFT)
+		)
 
-		footer = Text(
-			"arXiv:2608.17286", font=REGULAR, font_size=fs(25), color=DIM
-		).move_to([0, y_at(996 + 12), 0]).align_to([left, 0, 0], LEFT)
+		footer = (
+			Text("arXiv:2608.17286", font=REGULAR, font_size=fs(25), color=DIM)
+			.move_to([0, y_at(996 + 12), 0])
+			.align_to([left, 0, 0], LEFT)
+		)
 
 		bar_w, bar_h = 260 / PX, 4 / PX
-		track = Rectangle(width=bar_w, height=bar_h, fill_color=FAINT, fill_opacity=1, stroke_width=0)
+		track = Rectangle(
+			width=bar_w, height=bar_h, fill_color=FAINT, fill_opacity=1, stroke_width=0
+		)
 		track.move_to([x_at(1920 - MARGIN_PX) - bar_w / 2, y_at(1008 + 2), 0])
 		# scene 3 of 8, the same fraction the static slide would draw
-		done = Rectangle(
-			width=bar_w * 3 / 8, height=bar_h, fill_color=ACCENT, fill_opacity=1, stroke_width=0
-		).align_to(track, LEFT).set_y(track.get_y())
+		done = (
+			Rectangle(
+				width=bar_w * 3 / 8, height=bar_h, fill_color=ACCENT, fill_opacity=1, stroke_width=0
+			)
+			.align_to(track, LEFT)
+			.set_y(track.get_y())
+		)
 
 		self.add(eyebrow, footer, track, done)
 
@@ -112,16 +124,22 @@ class AnimatedCallout(Scene):
 		label_dy, num_gap = 0.62, 0.30
 
 		def label(text, y):
-			return Text(text, font=REGULAR, font_size=fs(30), color=DIM).move_to(
-				[0, y + label_dy, 0]
-			).align_to([left, 0, 0], LEFT)
+			return (
+				Text(text, font=REGULAR, font_size=fs(30), color=DIM)
+				.move_to([0, y + label_dy, 0])
+				.align_to([left, 0, 0], LEFT)
+			)
 
 		l1 = label("DIFFUSION  ·  THIS PAPER", row1_y)
 		l2 = label("LANGUAGE MODELS  ·  CHINCHILLA", row2_y)
 
 		def bar(width, colour, y):
 			r = Rectangle(
-				width=max(width, 1e-4), height=0.55, fill_color=colour, fill_opacity=1, stroke_width=0
+				width=max(width, 1e-4),
+				height=0.55,
+				fill_color=colour,
+				fill_opacity=1,
+				stroke_width=0,
 			)
 			r.move_to([left + max(width, 1e-4) / 2, y, 0])
 			return r

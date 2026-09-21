@@ -22,7 +22,7 @@ from rich.table import Table
 from .config import load_config
 from .llm import MissingAPIKey
 from .llm.cost import BudgetExceeded, CostTracker, Pricing
-from .paths import STAGE_ORDER, RunPaths, new_run_id, read_json
+from .paths import STAGE_ORDER, RunPaths, new_run_id, read_json, write_json
 from .stage import StageContext, StageError
 from .stages import (
 	EnrichStage,
@@ -113,6 +113,9 @@ def run(
 	from_stage: str = typer.Option(
 		"fetch", "--from", help=f"Start from this stage. One of: {', '.join(STAGE_ORDER)}"
 	),
+	through: str | None = typer.Option(
+		None, "--through", help="Stop after this stage (e.g. script to review before narration)"
+	),
 	run_id: str | None = typer.Option(None, "--run", help="Run ID (default: today, YYYY-MM-DD)"),
 	paper: str | None = typer.Option(
 		None, "--paper", help="Restrict per-paper stages to one arXiv ID"
@@ -127,13 +130,19 @@ def run(
 	if from_stage not in STAGE_ORDER:
 		console.print(f"[red]Unknown stage {from_stage!r}. Known: {', '.join(STAGE_ORDER)}[/red]")
 		raise typer.Exit(2)
+	if through is not None and (
+		through not in STAGE_ORDER or STAGE_ORDER.index(through) < STAGE_ORDER.index(from_stage)
+	):
+		console.print("[red]--through must name a stage at or after --from.[/red]")
+		raise typer.Exit(2)
 
 	run_id = run_id or new_run_id()
 	ctx = _build_context(run_id, config_path, paper)
 	console.print(f"[bold]Run {run_id}[/bold]  starting from [cyan]{from_stage}[/cyan]")
 
 	start_index = STAGE_ORDER.index(from_stage)
-	planned = [s for s in STAGE_ORDER[start_index:] if s in STAGES]
+	stop_index = STAGE_ORDER.index(through) + 1 if through else len(STAGE_ORDER)
+	planned = [s for s in STAGE_ORDER[start_index:stop_index] if s in STAGES]
 	if not planned:
 		console.print(
 			f"[yellow]No implemented stages at or after {from_stage!r}. "
@@ -164,7 +173,9 @@ def run(
 	_print_cost(report)
 	console.print(f"[green]Artifacts in {ctx.paths.root}[/green]")
 
-	advanced = _advance_window(ctx, from_stage, paper)
+	# A prior package may exist on disk. A new --through script invocation has
+	# not covered that fetch window, regardless of what an earlier run left.
+	advanced = _advance_window(ctx, from_stage, paper) if "package" in planned else None
 	if advanced is not None:
 		console.print(f"[green]Next run's window starts at {advanced:%Y-%m-%d %H:%M} UTC[/green]")
 
@@ -219,6 +230,76 @@ def cost(
 		console.print(f"[red]No cost report at {paths.cost_report_json}[/red]")
 		raise typer.Exit(1)
 	_print_cost(CostReport.model_validate(read_json(paths.cost_report_json)))
+
+
+@app.command()
+def review(
+	run_id: str | None = typer.Option(None, "--run", help="Run ID (default: today)"),
+	config_path: Path | None = typer.Option(None, "--config", help="Path to config.yaml"),
+) -> None:
+	"""Inspect story beats and pacing, without making any API calls."""
+	from .editorial import pacing_report
+	from .schemas import ScriptResult, VoiceResult
+
+	paths = RunPaths(run_id or new_run_id())
+	script_path = paths.stage_dir("script") / "script.json"
+	if not script_path.exists():
+		console.print("[red]No script found. Run through the script stage first.[/red]")
+		raise typer.Exit(1)
+	script = ScriptResult.model_validate(read_json(script_path))
+	voice_path = paths.stage_dir("voice") / "voice.json"
+	voice = VoiceResult.model_validate(read_json(voice_path)) if voice_path.exists() else None
+	if voice and voice.generated_at < script.generated_at:
+		console.print("[yellow]The script is newer than the audio; timing is estimated.[/yellow]")
+		voice = None
+	cfg = load_config(config_path)
+	report = pacing_report(
+		script, voice, scene_gap=cfg.tts.scene_gap_seconds, bridge_gap=cfg.tts.bridge_pause_seconds
+	)
+	write_json(paths.root / "pacing.json", report)
+	table = Table(title=f"Edit review · {report['timing']} · {report['duration_seconds']:.1f}s")
+	for title in ("Part", "Scene", "Beat", "Visual", "Seconds", "Timing"):
+		table.add_column(title)
+	for row in report["scenes"]:
+		table.add_row(
+			row["part"],
+			row["scene"],
+			row["beat"] or "—",
+			row["visual"],
+			f"{row['duration_seconds']:.1f}",
+			row["timing"],
+		)
+	console.print(table)
+	for issue in report["issues"]:
+		console.print(f"[yellow]{issue['part']}/{issue['scene']}:[/yellow] {issue['message']}")
+	if not report["issues"]:
+		console.print("[green]No pacing flags. Watch the render to judge the edit.[/green]")
+
+
+@app.command()
+def demo(
+	output: Path = typer.Option(Path("demos/out/editorial"), "--output"),
+	height: int = typer.Option(720, "--height", min=180, max=2160),
+	narrate: bool = typer.Option(
+		False, "--narrate", help="Use configured TTS (billed); default is silent"
+	),
+) -> None:
+	"""Render a self-contained style preview; no research or LLM calls."""
+	from .demo import render_demo
+
+	_setup_logging(False)
+	load_dotenv()
+	if height % 2 or round(height * 16 / 9) % 2:
+		console.print("[red]Choose an even 16:9 resolution, such as 360, 720, or 1080.[/red]")
+		raise typer.Exit(2)
+	try:
+		path = render_demo(output.resolve(), height, narrate=narrate)
+	except (StageError, BudgetExceeded) as e:
+		console.print(f"[red]{e}[/red]")
+		raise typer.Exit(1) from e
+	console.print(
+		f"[green]{'Narrated' if narrate else 'Silent'} illustrative preview: {path}[/green]"
+	)
 
 
 @app.command()

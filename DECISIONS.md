@@ -1561,6 +1561,77 @@ fallback to a static callout is a routine path rather than a safety net.
 
 ---
 
+## D38 - Edit the argument, and let the picture develop
+
+The next review asked for a substantial improvement in engagement and flow.
+The supplied 4:42 episode and the existing prompt/rendering code pointed to a
+specific problem: the format explains interesting findings but spends much of
+its time holding a whole figure or a short phrase while the narration advances.
+The opening also introduces material that the first segment introduces again.
+
+**The voice and palette stay direct.** This does not reinstate D29's host persona,
+second-person rhetoric, arbitrary camera zooms, burned-in captions, or a music
+drone. The change is in the structure and the relationship between an idea and
+its visual.
+
+- `script/v8` asks for hook, context, mechanism, evidence, caveat, and payoff.
+  Short hooks alternate with fuller explanations instead of every sentence
+  receiving the same shape. The shipped budget is 65 seconds and 9–11 scenes;
+  a sparse digest may produce fewer. Only the supplied digest supports claims.
+- `episode/v6` reduces the opening to two beats within nine seconds: tension
+  and promise. The series name is already on screen. Paper one starts directly;
+  later papers keep short, numbered signposts. There is still no outro.
+  The wrapper sees the actual segment openings and closes to avoid repetition.
+- `beat` and `pause_after` are optional scene fields. Invalid optional direction
+  is discarded on its own. Old scripts remain readable. Explicit zero pauses
+  work, and bridge pauses retain their episode-level override.
+- ElevenLabs receives the preceding and following sentence within a part, using
+  its documented `previous_text` and `next_text` fields. Other engines retain
+  their existing behavior. This is implemented and request-tested, not a claim
+  of an audible improvement measured against a fresh generation. Reference:
+  [ElevenLabs convert API](https://elevenlabs.io/docs/api-reference/text-to-speech/convert).
+
+**The editorial renderer uses cached Pillow layers and ffmpeg.** A mechanism
+builds as a sequence, a contrast becomes two panels, and a comparison reveals
+labels and correctly scaled bars. Headline and reading-cue fields guide the
+paper figures; the actual figures remain intact and uncropped. Reveal timing
+is relative to measured scene audio, not word alignment. Every layout leaves
+time to read its completed composition. No model-generated animation code,
+asset downloads, or new billed generation calls are involved.
+
+It runs in a bounded subprocess and falls back to the completed static layout
+if motion fails. Hard cuts and single-scene parts support animated clips too.
+`render.visual_style: classic` preserves the original rendering path; this repo's
+config explicitly selects `editorial`. Pillow, already required by rendering,
+is now declared as a direct dependency.
+
+**Timing fixes surfaced by the implementation:**
+
+- Missing middle audio now fails before encoding instead of truncating two
+  unrelated lists to a common prefix and putting later narration under the
+  wrong picture.
+- Incoming animations receive first-frame padding during a dissolve, so their
+  internal motion does not begin early against the audio. Real ffmpeg tests
+  inspect the incoming frame as well as stream durations.
+- Chapter markers follow the paper order when the first bridge is absent;
+  bridge scene IDs retain their cached naming convention.
+- Non-finite comparison values are rejected before they reach a chart.
+
+**The review loop becomes inexpensive.** `run --through script` stops before
+narration, `review` prints an estimated or measured edit timeline with actionable
+flags, and `demo` renders an explicitly illustrative preview without credentials.
+An early-stop invocation never advances a fetch window just because an old
+package already exists. These flags are editing heuristics, not retention
+predictions. No claim of improved audience retention has been measured.
+
+**Validation:** the silent seven-scene preview rendered at 1280×720/30 with
+1,215 video frames. Both encoded streams measured exactly 40.500 seconds. The
+test suite covers optional direction, zero/bridge pauses, continuity request
+fields, comparison geometry, static fallback, current chapter numbering, and
+real hard-cut/dissolve timing. A fresh LLM-scripted and ElevenLabs-narrated
+episode was not generated: those API credentials were absent. That live review
+is the remaining creative validation, rather than a hidden pass in this log.
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit

@@ -4,9 +4,30 @@ Automated pipeline that turns the week's notable arXiv AI/ML papers into a short
 video series, **ML Papers of the Day**. `SPEC.md` is the full design;
 `DECISIONS.md` records every choice made along the way.
 
-**Status: all ten stages built. Stages 1-9 validated end-to-end against live
+**New: an editorial video format.** The default now uses a short tension-first
+opening, a clear hook → mechanism → evidence → caveat → payoff in each paper,
+and timed visual builds instead of holding every slide unchanged. Process
+diagrams, contrasting ideas, exact-scale comparisons, and guided paper figures
+share the established dark palette. The renderer runs on Pillow + ffmpeg;
+Manim is optional for the original `classic` style.
+
+Preview it locally, without API keys or research downloads:
+
+```bash
+pipeline demo                           # silent, explicitly illustrative 720p preview
+pipeline demo --height 1080              # production-size layout check
+pipeline demo --narrate                  # uses configured TTS; this option is billed
+```
+
+The preview, storyboard and example script are in `demos/out/editorial/`.
+The demo uses illustrative content, not generated research claims. The new
+renderer has been exercised with real ffmpeg playback and timing checks; the
+new prompts and contextual voice delivery still need a fresh narrated episode
+review with your API credentials. See [Editorial workflow](#editorial-workflow).
+
+**Historical pipeline validation:** all ten stages built. Stages 1-9 validated end-to-end against live
 APIs across three complete episodes; Stage 10 (upload) runs in dry-run until a
-YouTube compliance audit clears.** A single command turns a live arXiv window
+YouTube compliance audit clears. A single command turns a live arXiv window
 into an upload-ready episode: **`episode.mp4` (1920x1080 H.264), three standalone
 segments, a thumbnail, and metadata with chapter timestamps** — for about **$2**
 on a normal window.
@@ -67,6 +88,45 @@ pipeline youtube-auth                # one-time OAuth; prints a refresh token
 #   episode.mp4  segment_<id>.mp4 x3  thumbnail.png  metadata.json  cost_report.json
 #   upload.json  <- stage 10: what was (or would be) sent to YouTube
 ```
+
+### Editorial workflow
+
+```bash
+# Stop before spending on speech. This also works with --from script for cached digests.
+pipeline run --through script
+pipeline review --run 2026-09-19
+
+# Review script/episode.md, then continue through the normal pipeline.
+pipeline run --run 2026-09-19 --from voice
+
+# Try the new visuals with an existing episode's cached narration, without new API calls.
+pipeline run --run 2026-09-19 --from render --through package
+```
+
+`review` shows the edit in play order with a timing label for each scene. It
+flags slow hooks, long holds, repeated layouts, unguided figures and missing
+payoffs. These are editing heuristics, not a predicted retention score. Timing
+is estimated before narration and measured when current audio is available.
+Reports are also written automatically to `script/pacing.json` and
+`render/pacing.json`.
+
+The shipped writing budget is 65 seconds per paper, 9–11 scenes, a nine-second
+opening and short signposts only before later papers. These are targets; the
+report and measured narration show what was actually produced. A scene's
+optional `pause_after` controls its rest, while ElevenLabs receives adjacent
+sentences as context for continuity within each segment.
+
+`render.visual_style: classic` restores the original layouts. Cached scripts
+remain valid without the new `beat`, `pause_after` or `source` fields; new
+`process` and `contrast` visuals have a readable fallback in the classic style.
+Editorial motion works with hard cuts, dissolves, and single-scene parts. If
+motion rendering fails, the completed composition is used as a still.
+
+The editorial layouts use scene-relative reveal timing, not forced word
+alignment. Figures remain uncropped; a headline and reading cue explain what
+to look for. Every quantitative comparison still passes the existing digest
+verification before rendering. Process/contrast descriptions still need the
+same factual review as narration.
 
 ### Publishing (stage 10)
 

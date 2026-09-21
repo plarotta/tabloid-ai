@@ -35,6 +35,7 @@ from ..schemas import (
 	EnrichedPaper,
 	EpisodeMetadata,
 	PaperDigest,
+	Scene,
 	SceneManifest,
 	ScriptResult,
 	Transition,
@@ -54,8 +55,9 @@ _SEGMENT_SHAPE = (
 	"number still lands that number."
 )
 _COLD_OPEN_SHAPE = (
-	"The first scene names the series and then the thread these papers share. "
-	"Every scene after it teases exactly one paper with one concrete hook."
+	"Two scenes: first a concrete tension supported by the papers, then a brief "
+	"promise of what the episode explains. Do not repeat the first paper's opening "
+	"finding or add a spoken series introduction."
 )
 
 YOUTUBE_TITLE_MAX = 70
@@ -80,6 +82,27 @@ def _detach_comparisons(payload: object) -> dict[str, object]:
 
 def _states(value: float, text: str) -> bool:
 	return re.search(rf"(?<!\d){re.escape(f'{value:g}')}(?!\d)", text) is not None
+
+
+def _detach_direction(payload: dict) -> dict[str, dict]:
+	"""Optional direction must never cost the narration when a model mistypes it."""
+	held = {}
+	for scene in payload.get("scenes") or []:
+		if isinstance(scene, dict):
+			held[str(scene.get("id"))] = {
+				key: scene.pop(key) for key in ("beat", "pause_after") if key in scene
+			}
+	return held
+
+
+def _attach_direction(manifest: SceneManifest, held: dict[str, dict]) -> None:
+	for scene in manifest.scenes:
+		for key, value in held.get(scene.id, {}).items():
+			try:
+				checked = Scene.model_validate({**scene.model_dump(), key: value})
+				setattr(scene, key, getattr(checked, key))
+			except ValueError:
+				log.warning("%s/%s: ignoring invalid %s", manifest.arxiv_id, scene.id, key)
 
 
 # `est_seconds` is the script's own budget arithmetic - words at
@@ -142,6 +165,12 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 	for s in manifest.scenes:
 		v = s.visual
 		bits = [f"**{v.type}**"]
+		if s.beat:
+			bits.append(f"beat: {s.beat}")
+		if s.pause_after is not None:
+			bits.append(f"pause: {s.pause_after:.2f}s")
+		if v.source:
+			bits.append(f"source: {v.source}")
 		if v.title:
 			bits.append(f"title: {v.title}")
 		if v.figure_file:
@@ -301,8 +330,10 @@ class ScriptStage(Stage):
 			# the segment is lost - which is what happened on the first live run of
 			# prompt v6 (D36).
 			detached = _detach_comparisons(payload)
+			direction = _detach_direction(payload)
 			manifest = SceneManifest.model_validate(payload)
 			self._attach_comparisons(manifest, detached)
+			_attach_direction(manifest, direction)
 		except ProviderUnavailable:
 			raise
 		except Exception as e:
@@ -498,7 +529,9 @@ class ScriptStage(Stage):
 		)
 		return manifest
 
-	def _clean_transitions(self, raw: object, order: list[str]) -> list[Transition]:
+	def _clean_transitions(
+		self, raw: object, order: list[str], first_optional: bool = False
+	) -> list[Transition]:
 		"""Keep at most one transition per paper, in play order.
 
 		Validated one at a time rather than as part of `EpisodeMetadata`, because
@@ -536,28 +569,42 @@ class ScriptStage(Stage):
 				)
 			by_id[t.into_arxiv_id] = t
 
-		missing = [a for a in order if a not in by_id]
+		missing = [a for a in (order[1:] if first_optional else order) if a not in by_id]
 		if missing:
 			log.warning("No transition into %s; that seam stays a hard cut", ", ".join(missing))
 		return [by_id[a] for a in order if a in by_id]
 
 	def _write_episode(
-		self, client: MeteredClient, digests: list[PaperDigest], enriched: dict, ranking
+		self,
+		client: MeteredClient,
+		digests: list[PaperDigest],
+		enriched: dict,
+		ranking,
+		segments: list[SceneManifest] | None = None,
 	) -> EpisodeMetadata:
 		cfg = self.config.script
 		spec = self.config.model_for(cfg.stage_model)
 		prompt = load_prompt("episode")
 		just = {r.arxiv_id: r.justification for r in ranking.finalists + ranking.substitutes}
+		written = {m.arxiv_id: m for m in segments or []}
 
 		blocks = []
 		for d in digests:
 			paper = enriched.get(d.arxiv_id)
+			segment = written.get(d.arxiv_id)
+			edges = ""
+			if segment and segment.scenes:
+				edges = (
+					f"\nactual_opening: {segment.scenes[0].narration}"
+					f"\nactual_close: {segment.scenes[-1].narration}"
+				)
 			blocks.append(
 				f"---\narxiv_id: {d.arxiv_id}\n"
 				f"title: {paper.paper.title if paper else ''}\n"
 				f"claim: {d.one_sentence_claim}\n"
 				f"why_it_matters: {d.why_it_matters}\n"
-				f"justification: {just.get(d.arxiv_id, '')}"
+				f"justification: {just.get(d.arxiv_id, '')}\n"
+				f"verified_digest:\n{digest_to_prompt_text(d)}{edges}"
 			)
 
 		# One scene to name the series and the thread, then one tease per paper.
@@ -572,7 +619,7 @@ class ScriptStage(Stage):
 			papers="\n".join(blocks),
 			cold_open_seconds=cfg.cold_open_seconds,
 			cold_open_words=cold_words,
-			cold_open_scenes=len(digests) + 1,
+			cold_open_scenes=2,
 			framing_words=cold_words - tease_words * len(digests),
 			tease_words=tease_words,
 			transition_seconds=cfg.transition_seconds,
@@ -594,9 +641,16 @@ class ScriptStage(Stage):
 			# Held back from the model_validate so one bad bridge cannot take the
 			# title and description down with it.
 			raw_transitions = payload.pop("transitions", None)
+			wrapper_direction = {}
+			for key in ("cold_open", "outro"):
+				if isinstance(payload.get(key), dict):
+					wrapper_direction[key] = _detach_direction(payload[key])
 			episode = EpisodeMetadata.model_validate(payload)
+			for key, direction in wrapper_direction.items():
+				if part := getattr(episode, key):
+					_attach_direction(part, direction)
 			episode.transitions = self._clean_transitions(
-				raw_transitions, [d.arxiv_id for d in digests]
+				raw_transitions, [d.arxiv_id for d in digests], first_optional=True
 			)
 		except ProviderUnavailable:
 			# The degraded wrapper below exists for a bad JSON parse. This is not
@@ -741,12 +795,26 @@ class ScriptStage(Stage):
 			log.warning("%s segment(s) failed: %s", len(missing), ", ".join(missing))
 
 		episode = self._write_episode(
-			client, [d for d, m in zip(digests, results, strict=True) if m], enriched, ranking
+			client,
+			[d for d, m in zip(digests, results, strict=True) if m],
+			enriched,
+			ranking,
+			segments,
 		)
 
 		result = ScriptResult(generated_at=datetime.now(UTC), segments=segments, episode=episode)
 		out = self.paths.stage_dir("script")
 		write_json(out / "script.json", json.loads(result.model_dump_json()))
+		from ..editorial import pacing_report
+
+		write_json(
+			out / "pacing.json",
+			pacing_report(
+				result,
+				scene_gap=self.config.tts.scene_gap_seconds,
+				bridge_gap=self.config.tts.bridge_pause_seconds,
+			),
+		)
 
 		# Reviewable markdown alongside the JSON.
 		for m in segments:
@@ -780,7 +848,7 @@ class ScriptStage(Stage):
 			if m is None:
 				continue
 			words += sum(len(sc.narration.split()) for sc in m.scenes)
-			silence += len(m.scenes) * gap
+			silence += sum(sc.pause_after if sc.pause_after is not None else gap for sc in m.scenes)
 		# A bridge is one clip and takes the longer beat, not the scene gap.
 		for t in result.episode.transitions:
 			words += len(t.narration.split())
@@ -810,15 +878,15 @@ class ScriptStage(Stage):
 			out += ["", scenes_to_markdown(ep.cold_open, "Cold open")]
 		# Bridges are read in the order they play, so they are interleaved here
 		# rather than listed separately - the seam is the thing being reviewed.
-		bridges = {t.into_arxiv_id: (i, t) for i, t in enumerate(ep.transitions)}
+		bridges = {t.into_arxiv_id: t for t in ep.transitions}
 		for m in result.segments:
 			paper = enriched.get(m.arxiv_id)
 			title = paper.paper.title if paper else m.arxiv_id
 			if m.arxiv_id in bridges:
-				i, t = bridges[m.arxiv_id]
+				t = bridges[m.arxiv_id]
 				out += [
 					"",
-					scenes_to_markdown(t.manifest(i, len(ep.transitions)), f"Transition → {title}"),
+					scenes_to_markdown(result.transition_manifest(t), f"Transition → {title}"),
 				]
 			out += ["", scenes_to_markdown(m, title)]
 		if ep.outro:

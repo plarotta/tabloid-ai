@@ -1,10 +1,24 @@
 # Demos
 
-Three local, visual demos for validating what the pipeline currently does. All
+Three local, visual demos for validating the original research stages. These
 are **stdlib only** (no extra installs) and all run against **real data** — no
 mocked outputs, no illustrative placeholders.
 
 None of them make a billed LLM call, so running them costs nothing.
+
+The video format also has a self-contained preview:
+
+```bash
+pipeline demo                       # 40.5s silent preview, no API calls
+pipeline demo --narrate              # same example through configured TTS (billed)
+```
+
+This newer demo uses explicitly illustrative content, unlike the three research
+inspection tools below. It exercises the actual motion renderer and muxer,
+including the hook, contrast, process, figure, comparison, caveat, and payoff.
+It writes `editorial-preview.mp4`, `storyboard.png`, `script.md`, and a pacing
+report under `demos/out/editorial/`. `pipeline review --run <id>` reviews actual
+episode scripts and measured narration.
 
 ```bash
 python demos/1_run_report.py         # static HTML report, opens in a browser

@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
-from ..render import animate, captions
+from ..render import animate, captions, editorial
 from ..render.captions import Cue
 from ..render.slides import BG as SLIDE_BG
 from ..render.slides import SlideContext, render_visual
@@ -81,7 +81,16 @@ def run_ffmpeg(args: list[str], what: str) -> None:
 	ffmpeg reports the actual reason on stderr and exits non-zero; without this
 	the caller sees only a return code.
 	"""
-	cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args]
+	cmd = [
+		"ffmpeg",
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-y",
+		"-filter_complex_threads",
+		"1",
+		*args,
+	]
 	try:
 		subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=True)
 	except subprocess.CalledProcessError as e:
@@ -152,6 +161,27 @@ class RenderStage(Stage):
 				log.warning("%s: audio for unknown scene %s; skipping", label, clip.scene_id)
 				continue
 			ctx.scene_index = i  # drives the progress bar
+			if cfg.visual_style == "editorial":
+				# This engine also supports single scenes and hard cuts. Its static
+				# fallback is the completed composition, never a half-built diagram.
+				directed = scene.model_copy(deep=True)
+				if not cfg.animated_callouts:
+					directed.visual.comparison = None
+				moving = editorial.render_clip(
+					directed,
+					ctx,
+					clip.duration_seconds + hold,
+					out_dir / f"{i:03d}_{scene.id}.mp4",
+					fps=cfg.fps,
+					timeout=cfg.animate_timeout_seconds,
+				)
+				if moving is not None:
+					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))
+					continue
+				path = out_dir / f"{i:03d}_{scene.id}.png"
+				editorial.EditorialScene(directed, ctx, clip.duration_seconds).poster().save(path)
+				slides.append(Slide(path, scene.visual.type, scene.narration))
+				continue
 
 			if animating and animate.wants_animation(scene.visual):
 				moving = animate.render_clip(
@@ -449,7 +479,19 @@ class RenderStage(Stage):
 		work.mkdir(parents=True, exist_ok=True)
 		voice_root = self.paths.stage_dir("voice")
 
-		clips = [c for c in audio.scenes if (voice_root / c.audio_file).exists()]
+		# Join by identity, never by a common prefix. A missing middle clip used
+		# to put the following narration under the wrong slide for the whole part.
+		ids = {s.id for s in manifest.scenes}
+		if len(ids) != len(manifest.scenes):
+			raise StageError(f"{label}: duplicate scene ids in the script")
+		clips = list(audio.scenes)
+		if len({c.scene_id for c in clips}) != len(clips):
+			raise StageError(f"{label}: duplicate scene ids in the narration")
+		for c in clips:
+			if c.scene_id not in ids:
+				raise StageError(f"{label}: audio scene {c.scene_id!r} has no matching script")
+			if not (voice_root / c.audio_file).is_file():
+				raise StageError(f"{label}: missing audio for {c.scene_id!r}; re-run voice")
 		if not clips:
 			log.error("%s: no audio files found; cannot render", label)
 			return None
@@ -478,14 +520,7 @@ class RenderStage(Stage):
 			log.error("%s: no slide matched a narrated scene; cannot render", label)
 			return None
 		if len(slides) != len(clips):
-			log.warning(
-				"%s: %s slides for %s audio clips; rendering the common prefix",
-				label,
-				len(slides),
-				len(clips),
-			)
-			n = min(len(slides), len(clips))
-			slides, clips = slides[:n], clips[:n]
+			raise StageError(f"{label}: every audio clip must have exactly one visual")
 		durations = [c.duration_seconds for c in clips]
 
 		# 1. Audio track: concat the per-scene clips in order.
@@ -582,6 +617,10 @@ class RenderStage(Stage):
 			pre = ";".join(
 				f"[{i}:v]"
 				f"{self._video_chain(s.visual_type, round((d + fade) * cfg.fps), s.animated)}"
+				f",trim=duration={d:.6f},setpts=PTS-STARTPTS,"
+				f"tpad=start_mode=clone:start_duration={fade if i else 0:.6f}:"
+				f"stop_mode=clone:stop_duration={fade:.6f},"
+				f"trim=duration={d + fade:.6f},settb=AVTB,setsar=1"
 				f"[v{i}]"
 				for i, (s, d) in enumerate(zip(slides, durations, strict=True))
 			)
@@ -600,6 +639,8 @@ class RenderStage(Stage):
 					f"{len(slides)}:a",
 					"-c:v",
 					"libx264",
+					"-threads",
+					"2",
 					"-preset",
 					"medium",
 					"-crf",
@@ -613,12 +654,16 @@ class RenderStage(Stage):
 					"-b:a",
 					"192k",
 					"-shortest",
+					"-t",
+					f"{total:.6f}",
 					"-movflags",
 					"+faststart",
 					str(out),
 				],
 				f"cross-fading the {label} segment",
 			)
+		elif any(s.animated for s in slides):
+			self._mux_motion_cuts(slides, durations, final_audio, out, caption_list)
 		else:
 			# Hard cuts: the concat demuxer holds each slide for its own duration.
 			# Only stills reach here - `animate_ok` is false whenever this path is
@@ -674,6 +719,75 @@ class RenderStage(Stage):
 		if cues:
 			log.info("  %s: %s caption cue(s)", label, len(cues))
 		return out, total
+
+	def _mux_motion_cuts(
+		self,
+		slides: list[Slide],
+		durations: list[float],
+		audio: Path,
+		out: Path,
+		caption_list: Path | None,
+	) -> None:
+		"""Hard cuts on one global clock, including a single animated scene.
+
+		An overlay's PTS starts at the measured scene boundary. Unlike separately
+		concatenating rounded clips, frame rounding cannot accumulate by scene.
+		"""
+		cfg = self.config.render
+		total = sum(durations)
+		args: list[str] = []
+		graph = [f"color=c=black:s={cfg.width}x{cfg.height}:r={cfg.fps}:d={total:.6f}[base]"]
+		at, last = 0.0, "base"
+		for i, (slide, duration) in enumerate(zip(slides, durations, strict=True)):
+			if not slide.animated:
+				args += ["-loop", "1"]
+			args += ["-t", f"{duration:.6f}", "-i", str(slide.path)]
+			graph.append(
+				f"[{i}:v]{self._video_chain(slide.visual_type, 0, slide.animated)},"
+				f"settb=AVTB,setpts=PTS-STARTPTS+{at:.6f}/TB[c{i}]"
+			)
+			graph.append(
+				f"[{last}][c{i}]overlay=eof_action=repeat:"
+				f"enable='gte(t,{at:.6f})*lt(t,{at + duration:.6f})'[cut{i}]"
+			)
+			last = f"cut{i}"
+			at += duration
+		args += ["-i", str(audio)]
+		filters = ";".join(graph)
+		if caption_list is not None:
+			args += ["-f", "concat", "-safe", "0", "-i", str(caption_list)]
+			filters, last = self._overlay_captions(filters, last, len(slides) + 1)
+		run_ffmpeg(
+			[
+				*args,
+				"-filter_complex",
+				filters,
+				"-map",
+				f"[{last}]",
+				"-map",
+				f"{len(slides)}:a",
+				"-c:v",
+				"libx264",
+				"-threads",
+				"2",
+				"-preset",
+				"medium",
+				"-crf",
+				"20",
+				"-pix_fmt",
+				"yuv420p",
+				"-c:a",
+				"aac",
+				"-b:a",
+				"192k",
+				"-t",
+				f"{total:.6f}",
+				"-movflags",
+				"+faststart",
+				str(out),
+			],
+			"assembling directed hard cuts",
+		)
 
 	def _stitch_episode(self, parts: list[tuple[Path, float]], out: Path, work: Path) -> None:
 		"""Join the episode's parts, cross-dissolving the seams between them.
@@ -793,6 +907,9 @@ class RenderStage(Stage):
 
 		script = ScriptStage(self.ctx).load()
 		voice = VoiceStage(self.ctx).load()
+		from ..editorial import pacing_report
+
+		write_json(self.paths.stage_dir("render") / "pacing.json", pacing_report(script, voice))
 		manifests = {m.arxiv_id: m for m in script.segments}
 		# Paper titles drive the eyebrow, so a viewer joining mid-segment knows
 		# which paper they are looking at.
@@ -839,8 +956,7 @@ class RenderStage(Stage):
 					log.info("  %s -> %s (%.0fs)", name, built[0].name, built[1])
 
 			narrated = {b.arxiv_id: b for b in voice.transitions}
-			total = len(script.episode.transitions)
-			for i, t in enumerate(script.episode.transitions):
+			for t in script.episode.transitions:
 				audio = narrated.get(t.into_arxiv_id)
 				if audio is None:
 					log.warning(
@@ -851,7 +967,7 @@ class RenderStage(Stage):
 					continue
 				slug = t.into_arxiv_id.replace("/", "_")
 				built = self._build_segment(
-					t.manifest(i, total),
+					script.transition_manifest(t),
 					audio,
 					f"transition_{slug}",
 					out_name=f"bridge_{slug}",

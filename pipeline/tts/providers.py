@@ -223,6 +223,19 @@ class ElevenLabsTTS(TTSClient):
 		self.settings = settings or {}
 
 	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+		return self.synthesize_with_context(text, out_path, voice)
+
+	def synthesize_with_context(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		*,
+		previous_text: str = "",
+		next_text: str = "",
+	) -> SpeechResult:
+		# Official convert endpoint: previous_text/next_text condition continuity
+		# without turning each visual cut into a fresh spoken introduction.
 		key = os.environ.get("ELEVENLABS_API_KEY")
 		if not key:
 			raise TTSError(
@@ -235,6 +248,10 @@ class ElevenLabsTTS(TTSClient):
 		out_path.parent.mkdir(parents=True, exist_ok=True)
 		vid = voice or self.default_voice
 		body: dict = {"text": text, "model_id": self.model}
+		if previous_text:
+			body["previous_text"] = strip_ssml(previous_text)[-1000:]
+		if next_text:
+			body["next_text"] = strip_ssml(next_text)[:1000]
 		if self.settings:
 			body["voice_settings"] = self.settings
 		resp = httpx.post(
