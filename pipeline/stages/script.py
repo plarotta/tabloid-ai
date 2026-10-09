@@ -97,8 +97,10 @@ def _detach_direction(payload: dict) -> dict[str, dict]:
 				# A non-rendered model annotation must not discard the spoken scene.
 				visual.pop("note")
 				log.warning("%s: ignoring unsupported visual note", scene.get("id"))
-			if isinstance(visual, dict) and "diagram" in visual:
-				held[str(scene.get("id"))]["diagram"] = visual.pop("diagram")
+			if isinstance(visual, dict):
+				for key in ("diagram", "reveal_phrase", "cue_phrases"):
+					if key in visual:
+						held[str(scene.get("id"))][key] = visual.pop(key)
 	return held
 
 
@@ -106,12 +108,12 @@ def _attach_direction(manifest: SceneManifest, held: dict[str, dict]) -> None:
 	for scene in manifest.scenes:
 		for key, value in held.get(scene.id, {}).items():
 			try:
-				if key == "diagram":
+				if key in ("diagram", "reveal_phrase", "cue_phrases"):
 					candidate = manifest.model_dump()
 					index = manifest.scenes.index(scene)
-					candidate["scenes"][index]["visual"]["diagram"] = value
+					candidate["scenes"][index]["visual"][key] = value
 					checked_manifest = SceneManifest.model_validate(candidate)
-					scene.visual.diagram = checked_manifest.scenes[index].visual.diagram
+					setattr(scene.visual, key, getattr(checked_manifest.scenes[index].visual, key))
 				else:
 					checked = Scene.model_validate({**scene.model_dump(), key: value})
 					setattr(scene, key, getattr(checked, key))
@@ -207,6 +209,14 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 			"",
 			" · ".join(bits),
 		]
+		from ..render.timing import cue_preflight
+
+		requests, warnings = cue_preflight(s)
+		if requests:
+			out += ["", "Spoken cues (timing measured after narration):"]
+			out += [f"- `{target}` → “{phrase}”" for target, phrase in requests.items()]
+		if warnings:
+			out += [""] + [f"- Review cue: {warning}" for warning in warnings]
 		if v.bullets:
 			out += [""] + [f"  - {b}" for b in v.bullets]
 		out.append("")

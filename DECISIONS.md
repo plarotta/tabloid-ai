@@ -1745,3 +1745,32 @@ with no fallback warnings. Tests cover character timing, delayed in-place value
 replacement, invalid-alignment fallback, speech preservation, SDK compatibility,
 and preview metadata/cached-audio reuse. Visual inspection and source review are
 recorded separately from any claim about audience retention or voice preference.
+
+## D41 - Let the explanation set the reveal order
+
+The owner's next continuation (2026-10-09) extends the measured-cue system to
+ordinary editorial layouts, rather than restricting it to persistent diagrams.
+`visual.cue_phrases` maps fixed content slots to exact unique narration phrases.
+Process and contrast cards, bullet items, figures, reading guides, chart values,
+and plain result callouts use the same alignment validation and explicit fallback
+as D40. Each chart bar and number starts together; split charts reveal both
+shares together so the population is not misrepresented. Existing manifests and
+node cues remain compatible. Classic mode is unchanged.
+
+Static cue preflight runs in script markdown and pacing review before TTS.
+Unknown targets, absent/ambiguous phrases, and conflicting duplicate direction
+are actionable warnings. No word times are estimated. Malformed optional cue
+metadata is isolated like other visual direction so it cannot discard narration.
+The v11 writing prompt describes the bounded slots and asks displayed order to
+follow the spoken explanation.
+
+The real-paper fixture adds three method cues and three caveat cues, with its
+bullet order matching the narration. Validation reuses the existing paid audio;
+there are no fresh LLM or TTS calls in this pass. Renderer tests check before/after
+pixels at measured cues, synchronized chart bars/numbers, unchanged final chart
+proportions, deterministic seeking, and early review warnings.
+
+The previous GitHub CI was cancelled during apt installation before any tests
+ran. CI now checks its required ffmpeg/font dependencies first and installs only
+when missing, with bounded package-manager steps. It still independently verifies
+those dependencies before tests; no render tests are skipped by this change.

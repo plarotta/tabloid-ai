@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from statistics import mean
 
-from .render.timing import reveal_cues
+from .render.timing import cue_preflight, reveal_cues
 from .schemas import ScriptResult, VoiceResult
 
 
@@ -55,7 +55,8 @@ def pacing_report(
 			)
 			clip = measured.get(name, {}).get(scene.id)
 			actual = clip.duration_seconds if clip is not None else None
-			cues, cue_warnings = reveal_cues(scene, clip) if clip else ({}, [])
+			requests, preflight_warnings = cue_preflight(scene)
+			cues, cue_warnings = reveal_cues(scene, clip) if clip else ({}, preflight_warnings)
 			duration = actual if actual is not None else words / words_per_second + pause
 			measured_count += actual is not None
 			v = scene.visual
@@ -70,6 +71,7 @@ def pacing_report(
 				"duration_seconds": round(duration, 3),
 				"timing": "measured" if actual is not None else "estimated",
 				"words": words,
+				"reveal_phrases": requests,
 				"reveal_cues_seconds": cues,
 				"reveal_warnings": cue_warnings,
 			}
@@ -79,7 +81,7 @@ def pacing_report(
 				issues.append({"part": part, "scene": scene_id, "code": code, "message": message})
 
 			for warning in cue_warnings:
-				note("unaligned_reveal", warning)
+				note("unaligned_reveal" if clip else "invalid_reveal_phrase", warning)
 			goal = " ".join(scene.teaches.casefold().split()).rstrip(".")
 			if not goal and not name.startswith("bridge_"):
 				note("missing_learning_goal", "State the one thing this scene teaches.")

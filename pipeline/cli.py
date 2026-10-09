@@ -273,6 +273,12 @@ def review(
 	for row in report["scenes"]:
 		if row["teaches"]:
 			console.print(f"{row['part']}/{row['scene']} teaches: {row['teaches']}", markup=False)
+		for target, phrase in row["reveal_phrases"].items():
+			seconds = row["reveal_cues_seconds"].get(target)
+			timing = f"{seconds:.2f}s" if seconds is not None else "awaiting alignment"
+			console.print(
+				f"  {row['part']}/{row['scene']} · {target} · {timing} · {phrase}", markup=False
+			)
 	for issue in report["issues"]:
 		console.print(f"[yellow]{issue['part']}/{issue['scene']}:[/yellow] {issue['message']}")
 	if not report["issues"]:

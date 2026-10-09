@@ -36,7 +36,12 @@
         "comparison": null,
         "source": "Section 3.2.2",
         "diagram": null,
-        "reveal_phrase": ""
+        "reveal_phrase": "",
+        "cue_phrases": {
+          "item:0": "projects representations",
+          "item:1": "parallel attention heads",
+          "item:2": "combines their outputs"
+        }
       },
       "est_seconds": 5.0,
       "beat": "mechanism",
@@ -195,15 +200,20 @@
         "figure_file": null,
         "title": "Keep the test in scope",
         "bullets": [
+          "Head dimensions change",
           "Development data",
-          "No checkpoint averaging",
-          "Head dimensions change"
+          "No checkpoint averaging"
         ],
         "highlight": null,
         "comparison": null,
         "source": "Table 3 / Section 6.2",
         "diagram": null,
-        "reveal_phrase": ""
+        "reveal_phrase": "",
+        "cue_phrases": {
+          "item:0": "Head dimensions change",
+          "item:1": "development results",
+          "item:2": "without checkpoint averaging"
+        }
       },
       "est_seconds": 7.5,
       "beat": "caveat",

@@ -9,7 +9,7 @@ they communicate only through `runs/<date>/<stage>/`. That is what makes
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -328,6 +328,11 @@ class Visual(StrictModel):
 	source: str = ""
 	diagram: Diagram | None = None
 	reveal_phrase: str = Field(default="", max_length=100)
+	# Exact narration phrases keyed by a renderer-owned content slot.
+	# Unsupported slots are advisory review warnings, never generated drawing code.
+	cue_phrases: dict[str, Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+		default_factory=dict, max_length=8
+	)
 
 	@model_validator(mode="after")
 	def check_diagram_type(self) -> Visual:
