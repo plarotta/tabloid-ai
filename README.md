@@ -392,3 +392,57 @@ the standalone segment, which has to be publishable on its own (D26).
   fonts, ffmpeg and libx264 are there and that a slide encodes; the full
   1920x1080 five-part stitch has only ever run on macOS. The first scheduled run
   is the real test.
+
+### Carry an explanation across scenes
+
+Script prompt v9 adds a `teaches` sentence to each scene and allows a concrete
+problem or diagram as the opening. `pipeline review` includes those learning
+goals and flags exact repeats for editorial review.
+
+A `process` visual may include a `diagram` with 2–3 stable nodes. Reuse its ID,
+node IDs, order, and labels across scenes; change only their `normal`, `focus`,
+or `removed` states. Objects retain their positions across cuts and dissolves,
+and can return after a figure or other layout. Only one node may be focused.
+Removed nodes remain visible with a removal marker and broken connections.
+An ablation requires a source reference; the reference and claimed outcome
+still need factual review against the paper. This is a fixed process layout,
+not arbitrary object morphing or a simulation of the research.
+
+```bash
+pipeline demo --continuity --output demos/out/continuity
+```
+
+This renders a 33-second silent, explicitly illustrative memory-task example,
+a storyboard, and `phone-review.png` at 390 pixels wide. The original demo
+remains available without `--continuity`; `--narrate` uses billed configured TTS.
+Check the phone sheet for legibility, then watch the actual transitions.
+Source references and series chrome are secondary metadata, not phone-size
+explanatory text. Cached scripts need neither learning goals nor diagrams.
+
+### Narration-linked outcomes
+
+Persistent diagram nodes may now carry a short `value` and `reveal_phrase`.
+The value changes inside the same node; its previous value remains visible until
+that phrase is spoken. `reveal_phrase` must match a unique phrase in the scene's
+narration. ElevenLabs now returns character timestamps with the audio, retained
+in `voice.json` and an alignment sidecar. Providers or cached runs without timing
+use the existing scene-relative reveals, with explicit review warnings.
+
+The timing report records resolved cue seconds and fallback reasons. Node values
+containing numbers are checked against the digest; this is a screening check,
+not a substitute for checking the experiment's conditions and causal claims.
+
+A reviewed real-paper fixture exercises the full narrated render:
+
+```bash
+python demos/4_validate_story.py --curated --narrate  # billed ElevenLabs voice
+python demos/4_validate_story.py --reuse-audio        # free visual revision
+python demos/4_validate_story.py --generate           # billed script draft; review before voice
+```
+
+The fixture uses *Attention Is All You Need*, Table 3 and Sections 3.2.2/6.2.
+Its digest is curated and its final script was edited after model generation;
+this validates voice, timing, and rendering, not automatic paper extraction or
+reliable unattended editorial decisions. Raw generated drafts still need fact
+and diagram-identity review. Keep the default dark palette and disabled music/
+captions unless you intentionally change those settings.

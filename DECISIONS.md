@@ -1658,3 +1658,90 @@ blocks publishing one automatically.
 | 2026-08-13 | `script` | v3 | Length becomes a hard cap (scene limit + per-scene word budget) after v2 ran 50% over three times; Stage 6 now enforces the scene cap in code. Narration shape borrows structure from explainer channels: open on a gap in what the viewer believes, second person, deliberately varied sentence length. No catchphrases. D29, D30. |
 | 2026-08-13 | `episode` | v3 | Names the series ("ML Papers of the Day") and restructures the cold open into three beats — series, shared thread, then the papers. Outro returns to the thread. Resolves §8 Q3. D30. |
 | 2026-08-11 | `episode` | v2 | Adds `transitions`: one bridge line before each paper, including the first. Each is a single spoken sentence that settles what just played and turns toward what is next, plus a two-to-five-word `label` for the card. Carries a ban list, because every obvious phrasing here ("next up", "moving on", numbering the papers) is a dead one, and a worked good/bad example. Backlog note 3, D26. |
+
+## D39 - Keep the explanation's objects alive
+
+The owner supplied an explainer-studio reference and approved borrowing visual
+continuity, explicit learning goals, problem-first openings, supported ablations,
+returning to the opening image, and phone-size review (2026-10-08).
+
+Prompt v9 asks what each scene teaches and permits a concrete visual opening
+instead of requiring a title card. Episode v7 adds learning goals to its existing
+short wrapper. These goals appear in markdown and pacing reports; exact repeats
+are advisory flags, not a semantic assessment of understanding.
+
+Optional persistent process diagrams use 2–3 named objects in fixed slots.
+The schema preserves node identity, order, and labels for a diagram throughout
+one segment, including after intervening figures. Focus fades onto one object;
+the topology is present from frame zero and survives the existing cut/dissolve
+pipeline. A removed object keeps its slot and label, receives an explicit marker,
+and breaks its incident connections. No bypass or numerical result is invented.
+This is intentionally bounded diagram continuity, not a general scene graph.
+
+Removal requires a nonempty source reference; validating the scientific ablation
+and its consequence still requires the digest/paper review. The prompt forbids
+invented removals or causal conclusions. Bad optional diagram direction is
+ignored while preserving narration and fallback bullets. Old manifests remain
+valid and classic mode uses a labeled textual fallback.
+
+`pipeline demo --continuity` exercises these changes through the production
+renderer and ffmpeg muxer in a 33-second, six-scene illustrative memory task.
+It returns to its initial diagram after a contrasting caveat scene. Every frame
+has an illustrative-content disclosure. The demo also produces a 390-pixel-wide
+phone contact sheet. Visual review caught a light-card/white-text mismatch; the
+node fill was corrected and text contrast now has a regression check. The main
+explanation is legible at phone size; small source/chrome text is secondary.
+
+Validation includes identity rejection, invalid-direction recovery, stable label
+pixels across focus changes, deterministic seeking, broken ablation connections,
+classic fallback, and duplicate learning-goal reporting. The silent demo is
+visually reviewed; fresh model-generated scripts and narrated output still need
+live review with API credentials. No audience retention claim is made.
+
+## D40 - Show the outcome at its spoken cue
+
+Approved follow-up: put the observed consequence inside the persistent diagram,
+link reveals to narration, and validate a real paper segment (2026-10-08/09).
+Nodes now hold short `value` fields. A scene retains the last value shown for
+that diagram until its replacement is revealed. Identity and fixed positions
+remain governed by D39. Node numbers are screened against the supplied digest;
+unsupported numbers are dropped rather than animated.
+
+The writer copies a unique spoken phrase into `reveal_phrase`, never estimates
+seconds. ElevenLabs' documented `/with-timestamps` endpoint returns audio plus
+character alignment in one synthesis request. Stage 7 carries that alignment into
+Stage 8. Exact normalized token matching resolves phrases to measured start
+times, rejects stale/malformed/ambiguous timing, and exposes fallback reasons in
+the pacing report. Cues currently apply to persistent diagram states, values,
+and their explanatory line; other layouts keep their existing timing.
+
+Primary API reference:
+https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps
+
+Live testing exposed two integration defects: the current Anthropic SDK omits
+`temperature`, and a model supplied an unsupported visual `note`. The adapter
+uses temperature only when the SDK accepts it; optional notes are discarded
+without losing narration. The preview also initially omitted required voice
+provider/model metadata after paid synthesis. That was fixed, alignment sidecars
+are now retained, and cached-audio reuse checks the exact narration and scene
+order before allowing a visual rerender. A forced-alignment recovery attempt
+returned HTTP 401 and was abandoned; a fresh normal synthesis run produced the
+final complete voice/timing artifact.
+
+The real-paper review uses https://arxiv.org/html/1706.03762v7 : Section 3.2.2,
+Section 6.2 and Table 3. These are newstest2013 development BLEU measurements,
+without checkpoint averaging. Head count and dimensions change together; the
+example must not imply removal of heads from one trained checkpoint.
+
+Model drafts were not publishable untouched: one changed diagram identities,
+and another asserted unchanged parameters without support in the supplied
+digest. The reviewed fixture fixes those issues and exposes the observed head
+count/quality values. This is a curated-source, human-reviewed script validation,
+not proof of reliable unattended extraction or writing.
+
+The final live ElevenLabs render has seven scenes totaling 44.773877 seconds.
+All eight requested phrase cues resolved against real synthesis timestamps,
+with no fallback warnings. Tests cover character timing, delayed in-place value
+replacement, invalid-alignment fallback, speech preservation, SDK compatibility,
+and preview metadata/cached-audio reuse. Visual inspection and source review are
+recorded separately from any claim about audience retention or voice preference.

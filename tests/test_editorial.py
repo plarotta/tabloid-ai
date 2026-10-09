@@ -203,9 +203,9 @@ def test_elevenlabs_receives_context_without_speaking_it(tmp_path, monkeypatch, 
 
 	monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
 	monkeypatch.setattr("pipeline.tts.providers.measure_duration", lambda path: 2.0)
-	route = respx_mock.post("https://api.elevenlabs.io/v1/text-to-speech/test-voice").mock(
-		return_value=httpx.Response(200, content=b"test-audio")
-	)
+	route = respx_mock.post(
+		"https://api.elevenlabs.io/v1/text-to-speech/test-voice/with-timestamps"
+	).mock(return_value=httpx.Response(200, json={"audio_base64": "dGVzdC1hdWRpbw=="}))
 	result = ElevenLabsTTS(voice="test-voice").synthesize_with_context(
 		"The actual line.",
 		tmp_path / "scene",

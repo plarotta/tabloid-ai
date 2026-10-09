@@ -90,8 +90,15 @@ def _detach_direction(payload: dict) -> dict[str, dict]:
 	for scene in payload.get("scenes") or []:
 		if isinstance(scene, dict):
 			held[str(scene.get("id"))] = {
-				key: scene.pop(key) for key in ("beat", "pause_after") if key in scene
+				key: scene.pop(key) for key in ("beat", "pause_after", "teaches") if key in scene
 			}
+			visual = scene.get("visual")
+			if isinstance(visual, dict) and "note" in visual:
+				# A non-rendered model annotation must not discard the spoken scene.
+				visual.pop("note")
+				log.warning("%s: ignoring unsupported visual note", scene.get("id"))
+			if isinstance(visual, dict) and "diagram" in visual:
+				held[str(scene.get("id"))]["diagram"] = visual.pop("diagram")
 	return held
 
 
@@ -99,8 +106,15 @@ def _attach_direction(manifest: SceneManifest, held: dict[str, dict]) -> None:
 	for scene in manifest.scenes:
 		for key, value in held.get(scene.id, {}).items():
 			try:
-				checked = Scene.model_validate({**scene.model_dump(), key: value})
-				setattr(scene, key, getattr(checked, key))
+				if key == "diagram":
+					candidate = manifest.model_dump()
+					index = manifest.scenes.index(scene)
+					candidate["scenes"][index]["visual"]["diagram"] = value
+					checked_manifest = SceneManifest.model_validate(candidate)
+					scene.visual.diagram = checked_manifest.scenes[index].visual.diagram
+				else:
+					checked = Scene.model_validate({**scene.model_dump(), key: value})
+					setattr(scene, key, getattr(checked, key))
 			except ValueError:
 				log.warning("%s/%s: ignoring invalid %s", manifest.arxiv_id, scene.id, key)
 
@@ -165,6 +179,15 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 	for s in manifest.scenes:
 		v = s.visual
 		bits = [f"**{v.type}**"]
+		if s.teaches:
+			bits.append(f"teaches: {s.teaches}")
+		if v.diagram:
+			bits.append(
+				"diagram: "
+				+ v.diagram.id
+				+ " / "
+				+ ", ".join(f"{n.label} ({n.state})" for n in v.diagram.nodes)
+			)
 		if s.beat:
 			bits.append(f"beat: {s.beat}")
 		if s.pause_after is not None:
@@ -244,6 +267,16 @@ class ScriptStage(Stage):
 		keeps the scene, which is the cheap direction to be wrong in.
 		"""
 		for scene in manifest.scenes:
+			if scene.visual.diagram:
+				for node in scene.visual.diagram.nodes:
+					if any(
+						not _states(float(n), digest_text)
+						for n in re.findall(r"\d+(?:\.\d+)?", node.value)
+					):
+						log.warning(
+							"%s/%s: dropping unverified node outcome", manifest.arxiv_id, scene.id
+						)
+						node.value = ""
 			c = scene.visual.comparison
 			if c is None:
 				continue
@@ -344,13 +377,9 @@ class ScriptStage(Stage):
 			log.error("%s: script contained no scenes", digest.arxiv_id)
 			return None
 
-		# The segment must stand alone, so it opens with its own title card.
-		if manifest.scenes[0].visual.type != "title_card":
-			log.warning(
-				"%s: segment does not open with a title card; it cannot be published "
-				"standalone as-is",
-				digest.arxiv_id,
-			)
+		# A concrete visual can open a standalone segment; it still needs a headline.
+		if not manifest.scenes[0].visual.title:
+			log.warning("%s: opening visual needs a standalone headline", digest.arxiv_id)
 		manifest = self._check_comparisons(
 			self._clean_manifest(manifest, paper), digest_to_prompt_text(digest)
 		)

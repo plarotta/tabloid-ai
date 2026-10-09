@@ -1,0 +1,262 @@
+{
+  "arxiv_id": "1706.03762",
+  "scenes": [
+    {
+      "id": "s1",
+      "narration": "Eight attention heads beat one head by nearly one BLEU point.",
+      "visual": {
+        "type": "title_card",
+        "figure_file": null,
+        "title": "Multiple views help translation",
+        "bullets": [],
+        "highlight": null,
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": null,
+        "reveal_phrase": ""
+      },
+      "est_seconds": 4.583333333333334,
+      "beat": "hook",
+      "teaches": "Multiple views help translation",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s2",
+      "narration": "The Transformer projects representations into parallel attention heads, then combines their outputs.",
+      "visual": {
+        "type": "process",
+        "figure_file": null,
+        "title": "Parallel attention views",
+        "bullets": [
+          "Project input",
+          "Attend in parallel",
+          "Combine outputs"
+        ],
+        "highlight": null,
+        "comparison": null,
+        "source": "Section 3.2.2",
+        "diagram": null,
+        "reveal_phrase": ""
+      },
+      "est_seconds": 5.0,
+      "beat": "mechanism",
+      "teaches": "Parallel attention views",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s3",
+      "narration": "With eight heads, English-to-German translation scores twenty-five point eight BLEU on the development set.",
+      "visual": {
+        "type": "process",
+        "figure_file": null,
+        "title": "Start with eight heads",
+        "bullets": [
+          "Attention",
+          "Translation",
+          "Evaluation"
+        ],
+        "highlight": "newstest2013 · Development BLEU",
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": {
+          "id": "translation-test",
+          "nodes": [
+            {
+              "id": "heads",
+              "label": "Attention",
+              "state": "focus",
+              "value": "8 heads",
+              "reveal_phrase": "eight heads"
+            },
+            {
+              "id": "task",
+              "label": "Translation",
+              "state": "normal",
+              "value": "EN → DE",
+              "reveal_phrase": ""
+            },
+            {
+              "id": "score",
+              "label": "Evaluation",
+              "state": "normal",
+              "value": "25.8 BLEU",
+              "reveal_phrase": "twenty-five point eight"
+            }
+          ]
+        },
+        "reveal_phrase": ""
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "Start with eight heads",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s4",
+      "narration": "With one head and larger head dimensions, the score falls to twenty-four point nine.",
+      "visual": {
+        "type": "process",
+        "figure_file": null,
+        "title": "Change to one head",
+        "bullets": [
+          "Attention",
+          "Translation",
+          "Evaluation"
+        ],
+        "highlight": "Head dimensions also change",
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": {
+          "id": "translation-test",
+          "nodes": [
+            {
+              "id": "heads",
+              "label": "Attention",
+              "state": "focus",
+              "value": "1 head",
+              "reveal_phrase": "one head"
+            },
+            {
+              "id": "task",
+              "label": "Translation",
+              "state": "normal",
+              "value": "EN → DE",
+              "reveal_phrase": ""
+            },
+            {
+              "id": "score",
+              "label": "Evaluation",
+              "state": "normal",
+              "value": "24.9 BLEU",
+              "reveal_phrase": "twenty-four point nine"
+            }
+          ]
+        },
+        "reveal_phrase": ""
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "Change to one head",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s5",
+      "narration": "Sixteen heads match eight. Thirty-two heads score twenty-five point four, despite keeping computation constant.",
+      "visual": {
+        "type": "process",
+        "figure_file": null,
+        "title": "More heads do not always help",
+        "bullets": [
+          "Attention",
+          "Translation",
+          "Evaluation"
+        ],
+        "highlight": "Head dimensions also change",
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": {
+          "id": "translation-test",
+          "nodes": [
+            {
+              "id": "heads",
+              "label": "Attention",
+              "state": "focus",
+              "value": "32 heads",
+              "reveal_phrase": "Thirty-two heads"
+            },
+            {
+              "id": "task",
+              "label": "Translation",
+              "state": "normal",
+              "value": "EN → DE",
+              "reveal_phrase": ""
+            },
+            {
+              "id": "score",
+              "label": "Evaluation",
+              "state": "normal",
+              "value": "25.4 BLEU",
+              "reveal_phrase": "twenty-five point four"
+            }
+          ]
+        },
+        "reveal_phrase": ""
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "More heads do not always help",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s6",
+      "narration": "Head dimensions change too. These are development results without checkpoint averaging, not head removal from one trained model.",
+      "visual": {
+        "type": "bullet_slide",
+        "figure_file": null,
+        "title": "Keep the test in scope",
+        "bullets": [
+          "Development data",
+          "No checkpoint averaging",
+          "Head dimensions change"
+        ],
+        "highlight": null,
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": null,
+        "reveal_phrase": ""
+      },
+      "est_seconds": 7.5,
+      "beat": "caveat",
+      "teaches": "Keep the test in scope",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s7",
+      "narration": "Multiple attention views help here. The best head count still needs testing for each task.",
+      "visual": {
+        "type": "process",
+        "figure_file": null,
+        "title": "A design choice to test",
+        "bullets": [
+          "Attention",
+          "Translation",
+          "Evaluation"
+        ],
+        "highlight": "newstest2013 · Development BLEU",
+        "comparison": null,
+        "source": "Table 3 / Section 6.2",
+        "diagram": {
+          "id": "translation-test",
+          "nodes": [
+            {
+              "id": "heads",
+              "label": "Attention",
+              "state": "focus",
+              "value": "8 heads",
+              "reveal_phrase": "Multiple attention views"
+            },
+            {
+              "id": "task",
+              "label": "Translation",
+              "state": "normal",
+              "value": "EN → DE",
+              "reveal_phrase": ""
+            },
+            {
+              "id": "score",
+              "label": "Evaluation",
+              "state": "normal",
+              "value": "25.8 BLEU",
+              "reveal_phrase": "help here"
+            }
+          ]
+        },
+        "reveal_phrase": ""
+      },
+      "est_seconds": 6.25,
+      "beat": "payoff",
+      "teaches": "A design choice to test",
+      "pause_after": 0.3
+    }
+  ]
+}
