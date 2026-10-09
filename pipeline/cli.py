@@ -270,6 +270,15 @@ def review(
 			row["timing"],
 		)
 	console.print(table)
+	for row in report["scenes"]:
+		if row["teaches"]:
+			console.print(f"{row['part']}/{row['scene']} teaches: {row['teaches']}", markup=False)
+		for target, phrase in row["reveal_phrases"].items():
+			seconds = row["reveal_cues_seconds"].get(target)
+			timing = f"{seconds:.2f}s" if seconds is not None else "awaiting alignment"
+			console.print(
+				f"  {row['part']}/{row['scene']} · {target} · {timing} · {phrase}", markup=False
+			)
 	for issue in report["issues"]:
 		console.print(f"[yellow]{issue['part']}/{issue['scene']}:[/yellow] {issue['message']}")
 	if not report["issues"]:
@@ -278,6 +287,9 @@ def review(
 
 @app.command()
 def demo(
+	continuity: bool = typer.Option(
+		False, "--continuity", help="Preview persistent diagram states"
+	),
 	output: Path = typer.Option(Path("demos/out/editorial"), "--output"),
 	height: int = typer.Option(720, "--height", min=180, max=2160),
 	narrate: bool = typer.Option(
@@ -293,7 +305,7 @@ def demo(
 		console.print("[red]Choose an even 16:9 resolution, such as 360, 720, or 1080.[/red]")
 		raise typer.Exit(2)
 	try:
-		path = render_demo(output.resolve(), height, narrate=narrate)
+		path = render_demo(output.resolve(), height, narrate=narrate, continuity=continuity)
 	except (StageError, BudgetExceeded) as e:
 		console.print(f"[red]{e}[/red]")
 		raise typer.Exit(1) from e

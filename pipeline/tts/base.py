@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..schemas import SpeechAlignment
+
 
 @dataclass(slots=True)
 class SpeechResult:
@@ -23,6 +25,7 @@ class SpeechResult:
 	characters: int
 	provider: str
 	model: str
+	alignment: SpeechAlignment | None = None
 
 
 class TTSClient(ABC):

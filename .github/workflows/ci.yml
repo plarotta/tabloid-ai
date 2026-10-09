@@ -30,8 +30,12 @@ jobs:
       # happens to ship this month.
       - name: Install ffmpeg and fonts
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          # Hosted images often already contain both. Avoid refreshing apt
+          # when the exact render dependencies are already usable.
+          if ! ffmpeg -version >/dev/null 2>&1 || ! test -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf; then
+            sudo timeout 180 apt-get update -qq
+            sudo timeout 180 apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          fi
 
       - uses: astral-sh/setup-uv@v5
 

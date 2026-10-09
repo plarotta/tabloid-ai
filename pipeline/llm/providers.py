@@ -50,6 +50,14 @@ class AnthropicClient(LLMClient):
 		}
 		if system:
 			kwargs["system"] = system
+		# New SDKs omit sampling controls; keep older SDK/config behavior where supported.
+		import inspect
+
+		parameters = inspect.signature(self._client.messages.create).parameters
+		if "temperature" not in parameters and not any(
+			p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+		):
+			kwargs.pop("temperature")
 		resp = self._client.messages.create(**kwargs)
 		text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
 		return LLMResponse(

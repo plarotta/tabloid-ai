@@ -63,8 +63,17 @@ class Layer:
 class EditorialScene:
 	"""A seekable scene: the same time always produces the same frame."""
 
-	def __init__(self, scene: Scene, ctx: SlideContext, duration: float):
+	def __init__(
+		self,
+		scene: Scene,
+		ctx: SlideContext,
+		duration: float,
+		cues: dict[str, float] | None = None,
+		previous_values: dict[str, str] | None = None,
+	):
 		self.scene, self.ctx = scene, ctx
+		self.cues = cues or {}
+		self.previous_values = previous_values or {}
 		self.duration = max(duration, 0.001)
 		self.layers: list[Layer] = []
 		self.base = self._ground()
@@ -102,17 +111,18 @@ class EditorialScene:
 		image = Image.new("RGBA", self.base.size)
 		return image, ImageDraw.Draw(image)
 
-	def add(self, image: Image.Image, at: float = 0, mode: str = "rise") -> None:
+	def add(self, image: Image.Image, at: float = 0, mode: str = "rise", cue: str = "") -> None:
 		box = image.getbbox()
 		if box:
 			# Motion takes at most half a second. Later content has reading time:
-			# everything has landed by 68% of the measured audio duration.
+			# untimed content lands by 68%; measured cues follow the narration.
+			start = self.cues.get(cue, at * self.duration)
 			self.layers.append(
 				Layer(
 					image.crop(box),
 					box[:2],
-					at * self.duration,
-					min(0.48, self.duration * 0.12),
+					start,
+					min(0.48, self.duration * 0.12, max(0.001, self.duration - start)),
 					mode,
 				)
 			)
@@ -178,14 +188,14 @@ class EditorialScene:
 		v = self.scene.visual
 		image, d = self.canvas()
 		self.text(d, v.title or v.highlight or "A new finding", (112, 314, 1690, 725), 132)
-		self.add(image)
+		self.add(image, cue="highlight" if not v.title or v.title == v.highlight else "")
 		image, d = self.canvas()
 		d.rectangle(self.rect((116, 269, 252, 277)), fill=ACCENT)
 		self.add(image, 0, "wipe")
 		if v.highlight and v.title and v.highlight != v.title:
 			image, d = self.canvas()
 			self.text(d, v.highlight, (118, 774, 1650, 894), 42, ACCENT, False)
-			self.add(image, 0.38)
+			self.add(image, 0.38, cue="highlight")
 		self._source()
 
 	def _transition(self) -> None:
@@ -221,11 +231,18 @@ class EditorialScene:
 				fill=mix(BG, ACCENT, 0.24),
 				width=1,
 			)
-			self.add(image, 0.08 + 0.44 * i / max(len(points) - 1, 1))
+			self.add(
+				image,
+				0.08 + 0.44 * i / max(len(points) - 1, 1),
+				cue=f"item:{i}" if v.bullets else "highlight",
+			)
 		self._source()
 
 	def _process(self) -> None:
 		v = self.scene.visual
+		if v.diagram:
+			self._diagram()
+			return
 		points = v.bullets[:4]
 		if not points:
 			self._title()
@@ -246,7 +263,7 @@ class EditorialScene:
 					],
 					fill=ACCENT,
 				)
-				self.add(image, max(0, at - 0.06), "wipe")
+				self.add(image, max(0, at - 0.06), "wipe", cue=f"item:{i}")
 			image, d = self.canvas()
 			d.rounded_rectangle(
 				self.rect((x, 416, x + width, 763)),
@@ -257,11 +274,100 @@ class EditorialScene:
 			)
 			self.text(d, f"{i + 1:02d}", (x + 32, 450, x + width - 30, 510), 34, ACCENT)
 			self.text(d, point, (x + 32, 556, x + width - 30, 718), 45)
-			self.add(image, at)
+			self.add(image, at, cue=f"item:{i}")
 		if v.highlight:
 			image, d = self.canvas()
 			self.text(d, v.highlight, (116, 826, 1800, 908), 36, ACCENT, False)
-			self.add(image, 0.58)
+			self.add(image, 0.58, cue="highlight")
+		self._source("Method schematic")
+
+	def _diagram(self) -> None:
+		"""Keep object geometry stable; reveal state and supported output on cues."""
+		v = self.scene.visual
+		nodes = v.diagram.nodes
+		self._heading(v.title or "Follow the mechanism")
+		ground = self.base.copy()
+		d = ImageDraw.Draw(self.base)
+		gap = 84
+		width = (1696 - gap * (len(nodes) - 1)) / len(nodes)
+		for i, node in enumerate(nodes):
+			x = 112 + i * (width + gap)
+			if i:
+				d.line(self.rect((x - 68, 590, x - 16, 590)), fill=ACCENT, width=self.size(4))
+				d.polygon(
+					[
+						(self.x(x - 12), self.y(590)),
+						(self.x(x - 28), self.y(580)),
+						(self.x(x - 28), self.y(600)),
+					],
+					fill=ACCENT,
+				)
+			d.rounded_rectangle(
+				self.rect((x, 416, x + width, 763)),
+				radius=self.size(22),
+				fill=mix(BG, ACCENT, 0.07),
+				outline=mix(BG, ACCENT, 0.55),
+				width=self.size(3),
+			)
+			self.text(d, node.label, (x + 28, 520, x + width - 28, 625), 66)
+			if previous := self.previous_values.get(node.id):
+				self.text(d, previous, (x + 28, 652, x + width - 28, 735), 54, ACCENT)
+		# All nodes exist before state layers, so connector masks never erase labels.
+		for i, node in enumerate(nodes):
+			x = 112 + i * (width + gap)
+			image, overlay = self.canvas()
+			color = BASE if node.state == "removed" else ACCENT
+			if node.state != "normal":
+				overlay.rounded_rectangle(
+					self.rect((x, 416, x + width, 763)),
+					radius=self.size(22),
+					outline=color,
+					width=self.size(5),
+				)
+				self.text(
+					overlay,
+					"REMOVED" if node.state == "removed" else "FOCUS",
+					(x + 28, 446, x + width - 28, 505),
+					38,
+					BASE_TEXT if node.state == "removed" else ACCENT,
+				)
+			if node.state == "removed":
+				for left in ([x - gap] if i else []) + ([x + width] if i + 1 < len(nodes) else []):
+					box = self.rect((left + 3, 568, left + gap - 3, 611))
+					image.paste(ground.crop(box), box[:2])
+					for offset in (16, 50):
+						overlay.line(
+							self.rect((left + offset, 590, left + offset + 16, 590)),
+							fill=BASE,
+							width=self.size(4),
+						)
+				overlay.line(
+					self.rect((x + width - 58, 442, x + width - 28, 472)),
+					fill=BASE,
+					width=self.size(4),
+				)
+				overlay.line(
+					self.rect((x + width - 58, 472, x + width - 28, 442)),
+					fill=BASE,
+					width=self.size(4),
+				)
+			if self.previous_values.get(node.id):
+				overlay.rectangle(
+					self.rect((x + 24, 646, x + width - 24, 740)), fill=mix(BG, ACCENT, 0.07)
+				)
+			if node.value:
+				self.text(
+					overlay,
+					node.value,
+					(x + 28, 652, x + width - 28, 735),
+					54,
+					BASE_TEXT if node.state == "removed" else ACCENT,
+				)
+			self.add(image, 0.08 + 0.15 * i, "fade", cue=f"node:{node.id}")
+		if v.highlight:
+			image, overlay = self.canvas()
+			self.text(overlay, v.highlight, (116, 814, 1800, 924), 50, FG)
+			self.add(image, 0.58, "fade", cue="highlight")
 		self._source("Method schematic")
 
 	def _contrast(self) -> None:
@@ -279,11 +385,11 @@ class EditorialScene:
 			)
 			d.rectangle(self.rect((x + 36, 399, x + 118, 405)), fill=color)
 			self.text(d, text, (x + 38, 495, x + 777, 730), 76, BASE_TEXT if i == 0 else FG)
-			self.add(image, 0.06 if i == 0 else 0.34)
+			self.add(image, 0.06 if i == 0 else 0.34, cue=f"item:{i}")
 		if v.highlight:
 			image, d = self.canvas()
 			self.text(d, v.highlight, (116, 844, 1800, 912), 36, ACCENT, False)
-			self.add(image, 0.55)
+			self.add(image, 0.55, cue="highlight")
 		self._source()
 
 	def _result(self) -> None:
@@ -295,7 +401,7 @@ class EditorialScene:
 			self.text(
 				d, v.highlight or v.title or "The finding", (112, 383, 1804, 760), 145, ACCENT
 			)
-			self.add(image, 0.07)
+			self.add(image, 0.07, cue="highlight")
 			self._source()
 			return
 		self._heading(v.title or c.label_a)
@@ -316,16 +422,16 @@ class EditorialScene:
 				d.rectangle(
 					self.rect((116, y + 81, 116 + 1260 * value / maximum, y + 158)), fill=color
 				)
-				self.add(image, 0.10 + i * 0.20, "wipe")
+				self.add(image, 0.10 + i * 0.20, "wipe", cue="value:a" if i == 0 else "value:b")
 				image, d = self.canvas()
 				self.text(d, f"{value:g}", (1430, y + 67, 1800, y + 179), 83, color)
-				self.add(image, 0.20 + i * 0.20)
+				self.add(image, 0.20 + i * 0.20, cue="value:a" if i == 0 else "value:b")
 		elif c.template == "split":
 			image, d = self.canvas()
 			cut = 112 + 1696 * c.value_a / 100
 			d.rectangle(self.rect((112, 530, cut, 631)), fill=ACCENT)
 			d.rectangle(self.rect((cut, 530, 1808, 631)), fill=BASE)
-			self.add(image, 0.16, "wipe")
+			self.add(image, 0.16, "wipe", cue="value:a")
 			for i, (label, value, color) in enumerate(
 				[(c.label_a, c.value_a, ACCENT), (c.label_b, 100 - c.value_a, BASE_TEXT)]
 			):
@@ -333,11 +439,11 @@ class EditorialScene:
 				image, d = self.canvas()
 				self.text(d, f"{value:g}%", (x, 368, x + 750, 498), 102, color)
 				self.text(d, label, (x, 671, x + 750, 800), 36, FG, False)
-				self.add(image, 0.09 + i * 0.24)
+				self.add(image, 0.09 + i * 0.24, cue="value:a")
 		else:
 			image, d = self.canvas()
 			self.text(d, f"{c.value_a:g}", (112, 339, 1770, 690), 246, ACCENT)
-			self.add(image, 0.10)
+			self.add(image, 0.10, cue="value:a")
 		if c.unit or c.note:
 			image, d = self.canvas()
 			self.text(
@@ -375,11 +481,11 @@ class EditorialScene:
 		except (OSError, ValueError) as e:
 			log.warning("Figure unavailable: %s", e)
 			self.text(d, "Figure unavailable", (180, 500, 1660, 640), 60, BG)
-		self.add(image, 0.04, "fade")
+		self.add(image, 0.04, "fade", cue="figure")
 		if v.highlight:
 			image, d = self.canvas()
 			self.text(d, v.highlight, (116, 891, 1808, 944), 32, ACCENT)
-			self.add(image, 0.50)
+			self.add(image, 0.50, cue="highlight")
 		# No fabricated figure number inferred from a filename with unrelated digits.
 		self._source(f"Paper figure · arXiv:{ctx.arxiv_id}" if ctx.arxiv_id else "Paper figure")
 
@@ -412,6 +518,8 @@ def render_clip(
 	out: Path,
 	fps: int = 30,
 	timeout: int = 120,
+	cues: dict[str, float] | None = None,
+	previous_values: dict[str, str] | None = None,
 ) -> Path | None:
 	"""Encode cached layers in a bounded worker; failures leave a usable poster.
 
@@ -433,6 +541,8 @@ def render_clip(
 					"duration": duration,
 					"out": str(out.resolve()),
 					"fps": fps,
+					"cues": cues or {},
+					"previous_values": previous_values or {},
 				},
 				default=str,
 			),
@@ -516,6 +626,10 @@ if __name__ == "__main__":
 	if context.get("figures_dir"):
 		context["figures_dir"] = Path(context["figures_dir"])
 	design = EditorialScene(
-		Scene.model_validate(payload["scene"]), SlideContext(**context), payload["duration"]
+		Scene.model_validate(payload["scene"]),
+		SlideContext(**context),
+		payload["duration"],
+		payload.get("cues"),
+		payload.get("previous_values"),
 	)
 	_encode(design, Path(payload["out"]), payload["duration"], payload["fps"])

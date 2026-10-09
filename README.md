@@ -122,9 +122,11 @@ remain valid without the new `beat`, `pause_after` or `source` fields; new
 Editorial motion works with hard cuts, dissolves, and single-scene parts. If
 motion rendering fails, the completed composition is used as a still.
 
-The editorial layouts use scene-relative reveal timing, not forced word
-alignment. Figures remain uncropped; a headline and reading cue explain what
-to look for. Every quantitative comparison still passes the existing digest
+Editorial layouts can reveal diagram states, process steps, contrast panels,
+bullet items, figures, and chart values at exact spoken phrases when narration
+includes character alignment. Without usable alignment they retain their
+scene-relative timing, with review warnings. Figures remain uncropped; a
+headline and reading cue explain what to look for. Every quantitative comparison still passes the existing digest
 verification before rendering. Process/contrast descriptions still need the
 same factual review as narration.
 
@@ -392,3 +394,88 @@ the standalone segment, which has to be publishable on its own (D26).
   fonts, ffmpeg and libx264 are there and that a slide encodes; the full
   1920x1080 five-part stitch has only ever run on macOS. The first scheduled run
   is the real test.
+
+### Carry an explanation across scenes
+
+Script prompt v9 adds a `teaches` sentence to each scene and allows a concrete
+problem or diagram as the opening. `pipeline review` includes those learning
+goals and flags exact repeats for editorial review.
+
+A `process` visual may include a `diagram` with 2–3 stable nodes. Reuse its ID,
+node IDs, order, and labels across scenes; change only their `normal`, `focus`,
+or `removed` states. Objects retain their positions across cuts and dissolves,
+and can return after a figure or other layout. Only one node may be focused.
+Removed nodes remain visible with a removal marker and broken connections.
+An ablation requires a source reference; the reference and claimed outcome
+still need factual review against the paper. This is a fixed process layout,
+not arbitrary object morphing or a simulation of the research.
+
+```bash
+pipeline demo --continuity --output demos/out/continuity
+```
+
+This renders a 33-second silent, explicitly illustrative memory-task example,
+a storyboard, and `phone-review.png` at 390 pixels wide. The original demo
+remains available without `--continuity`; `--narrate` uses billed configured TTS.
+Check the phone sheet for legibility, then watch the actual transitions.
+Source references and series chrome are secondary metadata, not phone-size
+explanatory text. Cached scripts need neither learning goals nor diagrams.
+
+### Narration-linked outcomes
+
+Persistent diagram nodes may now carry a short `value` and `reveal_phrase`.
+The value changes inside the same node; its previous value remains visible until
+that phrase is spoken. `reveal_phrase` must match a unique phrase in the scene's
+narration. ElevenLabs now returns character timestamps with the audio, retained
+in `voice.json` and an alignment sidecar. Providers or cached runs without timing
+use the existing scene-relative reveals, with explicit review warnings.
+
+The timing report records resolved cue seconds and fallback reasons. Node values
+containing numbers are checked against the digest; this is a screening check,
+not a substitute for checking the experiment's conditions and causal claims.
+
+A reviewed real-paper fixture exercises the full narrated render:
+
+```bash
+python demos/4_validate_story.py --curated --narrate  # billed ElevenLabs voice
+python demos/4_validate_story.py --reuse-audio        # free visual revision
+python demos/4_validate_story.py --generate           # billed script draft; review before voice
+```
+
+The fixture uses *Attention Is All You Need*, Table 3 and Sections 3.2.2/6.2.
+Its digest is curated and its final script was edited after model generation;
+this validates voice, timing, and rendering, not automatic paper extraction or
+reliable unattended editorial decisions. Raw generated drafts still need fact
+and diagram-identity review. Keep the default dark palette and disabled music/
+captions unless you intentionally change those settings.
+
+### Cue the explanation, not just the diagram
+
+Prompt v11 can set `visual.cue_phrases` to exact, unique narration phrases.
+The renderer accepts only the slots below; it never accepts drawing code or
+model-estimated timestamps.
+
+| Visual | Cue slot | What appears |
+|---|---|---|
+| Process without a diagram, contrast, bullet slide | `item:0`, `item:1`, etc. | Corresponding step, panel or bullet |
+| Two-bar comparison | `value:a`, `value:b` | That bar and its exact number together |
+| Single-number comparison | `value:a` | Exact reported number |
+| Split comparison | `value:a` | Entire proportional chart and both percentages |
+| Figure | `figure`, `highlight` | Image and reading guide, respectively |
+| Title, process, contrast, plain result callout | `highlight` | Explanatory line or plain result |
+
+Persistent diagrams keep their existing node `reveal_phrase` fields. A split
+cannot reveal the remainder independently: both shares describe one population.
+On a bullet slide with bullets, cue the individual items rather than a highlight.
+Headlines, chart labels, and source references provide context before the reveal.
+Classic rendering retains its existing behavior; these cues drive editorial mode.
+
+`pipeline review` and the script markdown now check cues **before voice**: missing
+or repeated phrases, unavailable targets, and conflicting direction are flagged
+without guessing seconds. After voice, the report prints measured cue times.
+Bad optional cue metadata is dropped without losing narration. These checks
+validate timing direction, not whether a scientific claim is true.
+
+The curated Transformer example also cues all three method steps and three
+limitations in spoken order. Its existing seven narration files can be reused
+with `--curated --reuse-audio`; no new synthesis is necessary for visual edits.
