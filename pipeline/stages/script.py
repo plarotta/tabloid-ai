@@ -98,7 +98,7 @@ def _detach_direction(payload: dict) -> dict[str, dict]:
 				visual.pop("note")
 				log.warning("%s: ignoring unsupported visual note", scene.get("id"))
 			if isinstance(visual, dict):
-				for key in ("diagram", "reveal_phrase", "cue_phrases"):
+				for key in ("diagram", "concept", "reveal_phrase", "cue_phrases"):
 					if key in visual:
 						held[str(scene.get("id"))][key] = visual.pop(key)
 	return held
@@ -108,7 +108,7 @@ def _attach_direction(manifest: SceneManifest, held: dict[str, dict]) -> None:
 	for scene in manifest.scenes:
 		for key, value in held.get(scene.id, {}).items():
 			try:
-				if key in ("diagram", "reveal_phrase", "cue_phrases"):
+				if key in ("diagram", "concept", "reveal_phrase", "cue_phrases"):
 					candidate = manifest.model_dump()
 					index = manifest.scenes.index(scene)
 					candidate["scenes"][index]["visual"][key] = value
@@ -183,6 +183,8 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 		bits = [f"**{v.type}**"]
 		if s.teaches:
 			bits.append(f"teaches: {s.teaches}")
+		if v.concept:
+			bits.append(f"animated concept: {v.concept.kind}")
 		if v.diagram:
 			bits.append(
 				"diagram: "
@@ -277,6 +279,19 @@ class ScriptStage(Stage):
 		keeps the scene, which is the cheap direction to be wrong in.
 		"""
 		for scene in manifest.scenes:
+			if concept := scene.visual.concept:
+				values = [p.value for p in concept.points]
+				if concept.kind == "parallel_paths":
+					values += [concept.branches]
+					if concept.previous_branches is not None:
+						values.append(concept.previous_branches)
+				labels = " ".join([p.label for p in concept.points] + concept.conditions)
+				values += [float(n) for n in re.findall(r"\d+(?:\.\d+)?", labels)]
+				if any(not _states(v, digest_text) for v in values):
+					log.warning(
+						"%s/%s: dropping unverified concept quantities", manifest.arxiv_id, scene.id
+					)
+					scene.visual.concept = None
 			if scene.visual.diagram:
 				for node in scene.visual.diagram.nodes:
 					if any(

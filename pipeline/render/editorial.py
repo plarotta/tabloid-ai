@@ -87,6 +87,12 @@ class EditorialScene:
 		self.layers: list[Layer] = []
 		self.base = self._ground()
 		self._chrome()
+		if scene.visual.concept:
+			from .concepts import ConceptScene
+
+			self.concept = ConceptScene(self)
+			return
+		self.concept = None
 		{
 			"title_card": self._title,
 			"transition": self._transition,
@@ -536,6 +542,8 @@ class EditorialScene:
 
 	def frame(self, seconds: float) -> Image.Image:
 		image = self.base.copy()
+		if self.concept is not None:
+			return self.concept.frame(seconds)
 		for layer in self.layers:
 			p = layer.progress(seconds)
 			if p <= 0:
@@ -652,7 +660,11 @@ def _encode(design: EditorialScene, out: Path, duration: float, fps: int) -> Non
 			last_key, data = None, b""
 			for i in range(frames):
 				t = i / fps
-				key = tuple(round(x.progress(t), 5) for x in design.layers)
+				key = (
+					i
+					if design.concept is not None
+					else tuple(round(x.progress(t), 5) for x in design.layers)
+				)
 				if key != last_key:
 					data = design.frame(t).tobytes()
 					last_key = key

@@ -1793,3 +1793,32 @@ current scene, and old manifests require no new fields.
 Regression checks cover removal/restoration, unchanged focus, cue-timed focus
 handoff, backward seeking, and fade-out progress. The real-paper preview is
 rerendered from the existing narration without paid provider calls.
+
+## D43 - Animate the concept instead of the slide
+
+The owner rejected the text-heavy direction and asked for a 3Blue1Brown-inspired
+explanation: each core concept should get an animated diagram (2026-10-15).
+The revision changes the visual vocabulary, not merely transition timing.
+
+Three bounded concept templates show splitting/recombining parallel computation,
+discrete experimental results, and evaluation scope. The script prompt now leads
+with objects, relationships, and the operation that teaches each idea. Titles and
+labels are short; the geometry carries the explanation. The curated example uses
+animated concepts in all seven scenes, eliminating its title and bullet slides.
+It preserves the exact spoken script and reuses the existing paid narration.
+
+Information-flow markers are explicitly schematic, not attention weights. Head
+size changes qualitatively with count; it does not encode measured dimensions.
+Parameter plots use labeled axes that may not start at zero; point spacing must
+not be interpreted as a ratio. No intermediate measurements or fitted trend is
+invented. The scope template is restricted to supported separate configurations,
+evaluation data, and no checkpoint averaging. Scientific review is still needed.
+
+Counts and outcomes are screened against the digest, invalid optional concepts
+preserve narration, and static fallback shows the complete diagram. Per-frame
+concept evaluation bypasses the static-layer cache so explanatory motion survives
+encoding. Rendering is deterministic under seeking.
+
+Cost instruction from owner: be very mindful of spending and report when/how
+money is spent. This redesign uses zero external API calls and stays at $0 API
+spend. Before a future paid call, state provider, purpose, estimated cost, and cap.

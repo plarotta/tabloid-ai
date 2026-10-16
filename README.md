@@ -484,3 +484,27 @@ Diagram continuity also preserves focus/removal states between scenes. A removed
 component stays marked and disconnected until its restoration cue; an unchanged
 focus does not blink at a cut. Focus transfers when the destination is introduced.
 The same diagram can return after another layout without losing its state.
+
+### Diagram-first concept animation
+
+Prompt v12 makes animated explanations the default for core concepts, with short
+labels instead of prose slides. `visual.concept` provides three bounded templates:
+
+- `parallel_paths`: split a representation into a source-backed number of views,
+  show information flowing along each path, then recombine. Changing the count
+  reshapes the fan at its narration cue. A previous and new measurement can share
+  the output location; numbers are never counted through fabricated values.
+- `parameter_sweep`: build discrete measured observations on a consistent labeled
+  axis. Hidden results stay hidden, earlier observations remain visible, and new
+  results arrive at spoken cues. There is no invented interpolated trend line.
+- `evaluation_scope`: schematic separate configurations, evaluation-set glyph,
+  and single-checkpoint condition. Use only when the digest supports those facts,
+  including no checkpoint averaging.
+
+All require source references. Counts and measured values are screened against
+the digest. Geometry illustrates structure, not learned attention weights or
+empirical trajectories. Sparse sources still require a real figure or simpler
+fallback rather than a fabricated visual explanation. Classic mode shows the
+finished diagram. The curated preview uses concept animation in all seven scenes
+and no title cards or bullet slides. Existing narration is reused; this redesign
+requires no new LLM or speech calls.

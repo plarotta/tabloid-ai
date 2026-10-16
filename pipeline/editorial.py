@@ -66,6 +66,7 @@ def pacing_report(
 				"beat": scene.beat,
 				"teaches": scene.teaches,
 				"diagram": v.diagram.id if v.diagram else None,
+				"concept": v.concept.kind if v.concept else None,
 				"visual": v.type,
 				"start_seconds": round(elapsed, 3),
 				"duration_seconds": round(duration, 3),
@@ -101,7 +102,7 @@ def pacing_report(
 				note("unguided_figure", "Add a headline or reading cue to guide this paper figure.")
 			layout = (v.type, v.diagram.id if v.diagram else None)
 			streak = streak + 1 if layout == previous else 1
-			if streak == 3 and not v.diagram:
+			if streak == 3 and not v.diagram and not v.concept:
 				note(
 					"repeated_layout",
 					"Three identical layouts in a row: vary how the idea is shown.",

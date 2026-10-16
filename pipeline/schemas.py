@@ -315,6 +315,46 @@ class Diagram(StrictModel):
 		return self
 
 
+class ConceptPoint(StrictModel):
+	label: str = Field(min_length=1, max_length=18)
+	value: float = Field(allow_inf_nan=False)
+	state: Literal["hidden", "context", "focus"] = "focus"
+
+
+class ConceptAnimation(StrictModel):
+	"""Bounded explanatory geometry, never model-authored rendering code."""
+
+	kind: Literal["parallel_paths", "parameter_sweep", "evaluation_scope"]
+	branches: int = Field(default=8, ge=1, le=32)
+	previous_branches: int | None = Field(default=None, ge=1, le=32)
+	input_label: str = Field(default="Input", max_length=24)
+	branch_label: str = Field(default="Views", max_length=24)
+	output_label: str = Field(default="Combine", max_length=24)
+	points: list[ConceptPoint] = Field(default_factory=list, max_length=6)
+	x_label: str = Field(default="Setting", max_length=24)
+	y_label: str = Field(default="Score", max_length=24)
+	# Scope diagrams require explicit supplied labels; no default scientific claim.
+	conditions: list[str] = Field(default_factory=list, max_length=3)
+
+	@model_validator(mode="after")
+	def check_concept(self) -> ConceptAnimation:
+		if self.kind == "parameter_sweep" and (
+			len(self.points) < 2 or len({p.label for p in self.points}) != len(self.points)
+		):
+			raise ValueError("A parameter sweep needs at least two uniquely labeled observations")
+		if self.kind == "parallel_paths" and (
+			len(self.points) > 2
+			or sum(p.state == "focus" for p in self.points) > 1
+			or sum(p.state == "context" for p in self.points) > 1
+		):
+			raise ValueError("A parallel process holds at most one previous and one new result")
+		if self.kind == "evaluation_scope" and len(self.conditions) != 3:
+			raise ValueError("Evaluation scope needs three source-grounded condition labels")
+		if any(len(label) > 32 for label in self.conditions):
+			raise ValueError("Scope labels must be short")
+		return self
+
+
 class Visual(StrictModel):
 	type: VisualType
 	figure_file: str | None = None
@@ -327,6 +367,7 @@ class Visual(StrictModel):
 	# A specific table/figure/section from the digest, shown beside the evidence.
 	source: str = ""
 	diagram: Diagram | None = None
+	concept: ConceptAnimation | None = None
 	reveal_phrase: str = Field(default="", max_length=100)
 	# Exact narration phrases keyed by a renderer-owned content slot.
 	# Unsupported slots are advisory review warnings, never generated drawing code.
@@ -336,6 +377,10 @@ class Visual(StrictModel):
 
 	@model_validator(mode="after")
 	def check_diagram_type(self) -> Visual:
+		if self.concept and (self.diagram or not self.source.strip()):
+			raise ValueError(
+				"Concept animation needs a source and cannot also carry a persistent diagram"
+			)
 		if self.diagram and self.type != "process":
 			raise ValueError("Persistent diagrams require a process visual")
 		if (

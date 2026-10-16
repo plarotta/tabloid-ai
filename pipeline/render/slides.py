@@ -541,6 +541,13 @@ def figure_slide(
 
 def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
 	"""Dispatch a SceneManifest visual to its slide type."""
+	if visual.concept:
+		from ..schemas import Scene
+		from .editorial import EditorialScene
+
+		return EditorialScene(
+			Scene(id=scene_id, narration="", visual=visual, est_seconds=5), ctx, 5
+		).poster()
 	vtype = visual.type
 	if vtype in {"process", "contrast"}:
 		# A readable fallback when replaying a new script with the classic style.

@@ -9,7 +9,13 @@ def cue_requests(scene: Scene) -> tuple[dict[str, str], list[str]]:
 	"""Return only slots the current layout actually renders."""
 	v = scene.visual
 	supported = set()
-	if v.diagram:
+	if v.concept:
+		if v.concept.kind == "parallel_paths":
+			supported.update({"input", "branches", "combine"})
+		elif v.concept.kind == "evaluation_scope":
+			supported.update({"condition:0", "condition:1", "condition:2"})
+		supported.update(f"point:{i}" for i, p in enumerate(v.concept.points) if p.state == "focus")
+	elif v.diagram:
 		supported.update(f"node:{n.id}" for n in v.diagram.nodes)
 	elif v.type in ("process", "contrast", "bullet_slide"):
 		count = min(len(v.bullets), 2 if v.type == "contrast" else 4)
