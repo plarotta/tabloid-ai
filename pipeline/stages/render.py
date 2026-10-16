@@ -155,6 +155,8 @@ class RenderStage(Stage):
 
 		out_dir.mkdir(parents=True, exist_ok=True)
 		slides = []
+		diagram_values = {}
+		diagram_states = {}
 		for i, clip in enumerate(audio.scenes):
 			scene = by_id.get(clip.scene_id)
 			if scene is None:
@@ -162,6 +164,18 @@ class RenderStage(Stage):
 				continue
 			ctx.scene_index = i  # drives the progress bar
 			if cfg.visual_style == "editorial":
+				from ..render.timing import reveal_cues
+
+				cues, cue_warnings = reveal_cues(scene, clip)
+				previous_values = {}
+				previous_states = {}
+				if diagram := scene.visual.diagram:
+					previous_values = diagram_values.get(diagram.id, {})
+					previous_states = diagram_states.get(diagram.id, {})
+					diagram_states[diagram.id] = {n.id: n.state for n in diagram.nodes}
+					diagram_values[diagram.id] = {n.id: n.value for n in diagram.nodes}
+				for warning in cue_warnings:
+					log.warning("%s/%s: %s", label, scene.id, warning)
 				# This engine also supports single scenes and hard cuts. Its static
 				# fallback is the completed composition, never a half-built diagram.
 				directed = scene.model_copy(deep=True)
@@ -174,6 +188,9 @@ class RenderStage(Stage):
 					out_dir / f"{i:03d}_{scene.id}.mp4",
 					fps=cfg.fps,
 					timeout=cfg.animate_timeout_seconds,
+					cues=cues,
+					previous_values=previous_values,
+					previous_states=previous_states,
 				)
 				if moving is not None:
 					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))

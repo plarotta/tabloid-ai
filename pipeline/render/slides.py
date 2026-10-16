@@ -541,10 +541,23 @@ def figure_slide(
 
 def render_visual(ctx: SlideContext, visual, scene_id: str = "") -> Image.Image:
 	"""Dispatch a SceneManifest visual to its slide type."""
+	if visual.concept:
+		from ..schemas import Scene
+		from .editorial import EditorialScene
+
+		return EditorialScene(
+			Scene(id=scene_id, narration="", visual=visual, est_seconds=5), ctx, 5
+		).poster()
 	vtype = visual.type
 	if vtype in {"process", "contrast"}:
 		# A readable fallback when replaying a new script with the classic style.
-		return bullet_slide(ctx, visual.title or "", visual.bullets)
+		points = visual.bullets
+		if visual.diagram:
+			points = [
+				f"{n.label} — {n.state}" + (f": {n.value}" if n.value else "")
+				for n in visual.diagram.nodes
+			]
+		return bullet_slide(ctx, visual.title or "", points)
 	if vtype == "transition":
 		return transition_card(ctx, visual.title or "", visual.highlight or "")
 	if vtype == "figure" and visual.figure_file and ctx.figures_dir:

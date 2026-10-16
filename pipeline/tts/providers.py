@@ -17,6 +17,8 @@ syncs scene boundaries to real audio, never to the script's `est_seconds`.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 import re
@@ -24,6 +26,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..schemas import SpeechAlignment
 from .base import SpeechResult, TTSClient
 
 log = logging.getLogger(__name__)
@@ -255,14 +258,29 @@ class ElevenLabsTTS(TTSClient):
 		if self.settings:
 			body["voice_settings"] = self.settings
 		resp = httpx.post(
-			f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
-			headers={"xi-api-key": key, "accept": "audio/mpeg"},
+			f"https://api.elevenlabs.io/v1/text-to-speech/{vid}/with-timestamps",
+			headers={"xi-api-key": key, "accept": "application/json"},
 			json=body,
 			timeout=180.0,
 		)
 		if resp.status_code != 200:
 			raise TTSError(f"elevenlabs returned {resp.status_code}: {resp.text[:200]}")
-		out_path.write_bytes(resp.content)
+		try:
+			payload = resp.json()
+			audio = base64.b64decode(payload["audio_base64"], validate=True)
+			if not audio:
+				raise ValueError("empty audio")
+		except (ValueError, KeyError, TypeError, binascii.Error) as e:
+			raise TTSError("elevenlabs returned invalid timestamped audio") from e
+		out_path.write_bytes(audio)
+		alignment = None
+		try:
+			if raw := payload.get("alignment") or payload.get("normalized_alignment"):
+				alignment = SpeechAlignment.model_validate(raw)
+		except ValueError:
+			log.warning("Invalid ElevenLabs alignment; keeping audio with scene-relative motion")
+		if alignment:
+			out_path.with_suffix(".alignment.json").write_text(alignment.model_dump_json())
 
 		return SpeechResult(
 			audio_path=out_path,
@@ -270,6 +288,7 @@ class ElevenLabsTTS(TTSClient):
 			characters=len(text),
 			provider=self.provider,
 			model=self.model,
+			alignment=alignment,
 		)
 
 

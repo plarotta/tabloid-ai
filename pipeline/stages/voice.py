@@ -134,6 +134,7 @@ class VoiceStage(Stage):
 					duration_seconds=duration,
 					characters=result.characters,
 					est_seconds=scene.est_seconds,
+					alignment=getattr(result, "alignment", None),
 				)
 			)
 			# Audio is billed per character by hosted engines; the local one is

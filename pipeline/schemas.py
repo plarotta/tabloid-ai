@@ -9,7 +9,7 @@ they communicate only through `runs/<date>/<stage>/`. That is what makes
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -289,6 +289,72 @@ class Comparison(StrictModel):
 		return ", ".join(parts)
 
 
+class DiagramNode(StrictModel):
+	"""A stable object in a conceptual process, not a quantitative measurement."""
+
+	id: str = Field(min_length=1, max_length=40, pattern=r"^[a-zA-Z0-9_-]+$")
+	label: str = Field(min_length=1, max_length=28)
+	state: Literal["normal", "focus", "removed"] = "normal"
+	# A short supported observation, not a generated measurement or simulation.
+	value: str = Field(default="", max_length=28)
+	reveal_phrase: str = Field(default="", max_length=100)
+
+
+class Diagram(StrictModel):
+	"""Repeat the same ordered nodes to carry a diagram through a segment."""
+
+	id: str = Field(min_length=1, max_length=40, pattern=r"^[a-zA-Z0-9_-]+$")
+	nodes: list[DiagramNode] = Field(min_length=2, max_length=3)
+
+	@model_validator(mode="after")
+	def check_nodes(self) -> Diagram:
+		if len({n.id for n in self.nodes}) != len(self.nodes):
+			raise ValueError("Diagram node IDs must be unique")
+		if sum(n.state == "focus" for n in self.nodes) > 1:
+			raise ValueError("Only one focal object per scene")
+		return self
+
+
+class ConceptPoint(StrictModel):
+	label: str = Field(min_length=1, max_length=18)
+	value: float = Field(allow_inf_nan=False)
+	state: Literal["hidden", "context", "focus"] = "focus"
+
+
+class ConceptAnimation(StrictModel):
+	"""Bounded explanatory geometry, never model-authored rendering code."""
+
+	kind: Literal["parallel_paths", "parameter_sweep", "evaluation_scope"]
+	branches: int = Field(default=8, ge=1, le=32)
+	previous_branches: int | None = Field(default=None, ge=1, le=32)
+	input_label: str = Field(default="Input", max_length=24)
+	branch_label: str = Field(default="Views", max_length=24)
+	output_label: str = Field(default="Combine", max_length=24)
+	points: list[ConceptPoint] = Field(default_factory=list, max_length=6)
+	x_label: str = Field(default="Setting", max_length=24)
+	y_label: str = Field(default="Score", max_length=24)
+	# Scope diagrams require explicit supplied labels; no default scientific claim.
+	conditions: list[str] = Field(default_factory=list, max_length=3)
+
+	@model_validator(mode="after")
+	def check_concept(self) -> ConceptAnimation:
+		if self.kind == "parameter_sweep" and (
+			len(self.points) < 2 or len({p.label for p in self.points}) != len(self.points)
+		):
+			raise ValueError("A parameter sweep needs at least two uniquely labeled observations")
+		if self.kind == "parallel_paths" and (
+			len(self.points) > 2
+			or sum(p.state == "focus" for p in self.points) > 1
+			or sum(p.state == "context" for p in self.points) > 1
+		):
+			raise ValueError("A parallel process holds at most one previous and one new result")
+		if self.kind == "evaluation_scope" and len(self.conditions) != 3:
+			raise ValueError("Evaluation scope needs three source-grounded condition labels")
+		if any(len(label) > 32 for label in self.conditions):
+			raise ValueError("Scope labels must be short")
+		return self
+
+
 class Visual(StrictModel):
 	type: VisualType
 	figure_file: str | None = None
@@ -300,6 +366,30 @@ class Visual(StrictModel):
 	comparison: Comparison | None = None
 	# A specific table/figure/section from the digest, shown beside the evidence.
 	source: str = ""
+	diagram: Diagram | None = None
+	concept: ConceptAnimation | None = None
+	reveal_phrase: str = Field(default="", max_length=100)
+	# Exact narration phrases keyed by a renderer-owned content slot.
+	# Unsupported slots are advisory review warnings, never generated drawing code.
+	cue_phrases: dict[str, Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+		default_factory=dict, max_length=8
+	)
+
+	@model_validator(mode="after")
+	def check_diagram_type(self) -> Visual:
+		if self.concept and (self.diagram or not self.source.strip()):
+			raise ValueError(
+				"Concept animation needs a source and cannot also carry a persistent diagram"
+			)
+		if self.diagram and self.type != "process":
+			raise ValueError("Persistent diagrams require a process visual")
+		if (
+			self.diagram
+			and any(n.state == "removed" for n in self.diagram.nodes)
+			and not self.source.strip()
+		):
+			raise ValueError("A component removal needs a source for the ablation")
+		return self
 
 
 class Scene(StrictModel):
@@ -311,16 +401,27 @@ class Scene(StrictModel):
 	est_seconds: float = Field(gt=0)
 	# Optional so cached scripts remain valid. Direction is metadata, never speech.
 	beat: StoryBeat | None = None
+	teaches: str = Field(default="", max_length=240)
 	# None uses the configured default; zero is a deliberate continuous cut.
 	pause_after: float | None = Field(default=None, ge=0, le=1.2, allow_inf_nan=False)
 
 
 class SceneManifest(StrictModel):
-	"""One paper's segment. Renderable standalone, so it opens with its own
-	title card (spec Stage 6, for Shorts repurposing)."""
+	"""One paper's standalone segment, opening on a finding or concrete problem."""
 
 	arxiv_id: str
 	scenes: list[Scene]
+
+	@model_validator(mode="after")
+	def check_diagram_identity(self) -> SceneManifest:
+		identities = {}
+		for scene in self.scenes:
+			if diagram := scene.visual.diagram:
+				identity = [(n.id, n.label) for n in diagram.nodes]
+				if diagram.id in identities and identities[diagram.id] != identity:
+					raise ValueError("A diagram must preserve node IDs, order, and labels")
+				identities[diagram.id] = identity
+		return self
 
 	@property
 	def est_seconds(self) -> float:
@@ -408,6 +509,32 @@ class ScriptResult(StrictModel):
 # --- Stage 7: voice ----------------------------------------------------------
 
 
+class SpeechAlignment(StrictModel):
+	"""Provider-reported character timing; absent on older or unaligned audio."""
+
+	characters: list[str]
+	character_start_times_seconds: list[float]
+	character_end_times_seconds: list[float]
+
+	@model_validator(mode="after")
+	def check_alignment(self) -> SpeechAlignment:
+		import math
+
+		starts, ends = self.character_start_times_seconds, self.character_end_times_seconds
+		if not self.characters or len(self.characters) != len(starts) or len(starts) != len(ends):
+			raise ValueError("Alignment arrays must have equal, nonzero lengths")
+		if any(len(c) != 1 for c in self.characters):
+			raise ValueError("Alignment entries must be individual characters")
+		if any(
+			not math.isfinite(a) or not math.isfinite(b) or a < 0 or b < a
+			for a, b in zip(starts, ends, strict=True)
+		):
+			raise ValueError("Alignment times must be finite and ordered")
+		if starts != sorted(starts) or ends != sorted(ends):
+			raise ValueError("Alignment times must be monotonic")
+		return self
+
+
 class SceneAudio(StrictModel):
 	"""One narrated scene. `duration_seconds` is **measured** from the produced
 	audio, never the script's `est_seconds` - Stage 8 syncs to this."""
@@ -417,6 +544,7 @@ class SceneAudio(StrictModel):
 	duration_seconds: float = Field(gt=0)
 	characters: int
 	est_seconds: float = 0.0
+	alignment: SpeechAlignment | None = None
 
 	@property
 	def drift_seconds(self) -> float:

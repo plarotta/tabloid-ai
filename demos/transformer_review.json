@@ -1,0 +1,242 @@
+{
+  "arxiv_id": "1706.03762",
+  "scenes": [
+    {
+      "id": "s1",
+      "narration": "Eight attention heads beat one head by nearly one BLEU point.",
+      "visual": {
+        "type": "result_callout",
+        "title": "One view vs. eight",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "parameter_sweep",
+          "points": [
+            {
+              "label": "1",
+              "value": 24.9,
+              "state": "focus"
+            },
+            {
+              "label": "8",
+              "value": 25.8,
+              "state": "focus"
+            },
+            {
+              "label": "16",
+              "value": 25.8,
+              "state": "hidden"
+            },
+            {
+              "label": "32",
+              "value": 25.4,
+              "state": "hidden"
+            }
+          ],
+          "x_label": "Attention heads",
+          "y_label": "Development BLEU"
+        },
+        "cue_phrases": {
+          "point:0": "one head",
+          "point:1": "Eight attention heads"
+        }
+      },
+      "est_seconds": 4.583333333333334,
+      "beat": "hook",
+      "teaches": "Multiple views help translation",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s2",
+      "narration": "The Transformer projects representations into parallel attention heads, then combines their outputs.",
+      "visual": {
+        "type": "process",
+        "title": "Split. Attend. Recombine.",
+        "source": "Section 3.2.2",
+        "concept": {
+          "kind": "parallel_paths",
+          "branches": 8,
+          "input_label": "Representation",
+          "branch_label": "heads",
+          "output_label": "Translation",
+          "y_label": "Dev. BLEU",
+          "points": []
+        },
+        "cue_phrases": {
+          "input": "projects representations",
+          "branches": "parallel attention heads",
+          "combine": "combines their outputs"
+        }
+      },
+      "est_seconds": 5.0,
+      "beat": "mechanism",
+      "teaches": "Parallel attention views",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s3",
+      "narration": "With eight heads, English-to-German translation scores twenty-five point eight BLEU on the development set.",
+      "visual": {
+        "type": "process",
+        "title": "Eight parallel views",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "parallel_paths",
+          "branches": 8,
+          "input_label": "Representation",
+          "branch_label": "heads",
+          "output_label": "Translation",
+          "y_label": "Dev. BLEU",
+          "previous_branches": 8,
+          "points": [
+            {
+              "label": "Observed",
+              "value": 25.8,
+              "state": "focus"
+            }
+          ]
+        },
+        "cue_phrases": {
+          "point:0": "twenty-five point eight"
+        }
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "Start with eight heads",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s4",
+      "narration": "With one head and larger head dimensions, the score falls to twenty-four point nine.",
+      "visual": {
+        "type": "process",
+        "title": "One wider view",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "parallel_paths",
+          "branches": 1,
+          "input_label": "Representation",
+          "branch_label": "heads",
+          "output_label": "Translation",
+          "y_label": "Dev. BLEU",
+          "previous_branches": 8,
+          "points": [
+            {
+              "label": "Previous",
+              "value": 25.8,
+              "state": "context"
+            },
+            {
+              "label": "Observed",
+              "value": 24.9,
+              "state": "focus"
+            }
+          ]
+        },
+        "cue_phrases": {
+          "branches": "one head",
+          "point:1": "twenty-four point nine"
+        }
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "Change to one head",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s5",
+      "narration": "Sixteen heads match eight. Thirty-two heads score twenty-five point four, despite keeping computation constant.",
+      "visual": {
+        "type": "result_callout",
+        "title": "More is not always better",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "parameter_sweep",
+          "points": [
+            {
+              "label": "1",
+              "value": 24.9,
+              "state": "context"
+            },
+            {
+              "label": "8",
+              "value": 25.8,
+              "state": "context"
+            },
+            {
+              "label": "16",
+              "value": 25.8,
+              "state": "focus"
+            },
+            {
+              "label": "32",
+              "value": 25.4,
+              "state": "focus"
+            }
+          ],
+          "x_label": "Attention heads",
+          "y_label": "Development BLEU"
+        },
+        "cue_phrases": {
+          "point:2": "Sixteen heads",
+          "point:3": "twenty-five point four"
+        }
+      },
+      "est_seconds": 5.833333333333334,
+      "beat": "evidence",
+      "teaches": "More heads do not always help",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s6",
+      "narration": "Head dimensions change too. These are development results without checkpoint averaging, not head removal from one trained model.",
+      "visual": {
+        "type": "process",
+        "title": "What was actually tested",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "evaluation_scope",
+          "conditions": [
+            "Dimensions change",
+            "Development set",
+            "No averaging"
+          ]
+        },
+        "cue_phrases": {
+          "condition:0": "Head dimensions change",
+          "condition:1": "development results",
+          "condition:2": "without checkpoint averaging"
+        }
+      },
+      "est_seconds": 7.5,
+      "beat": "caveat",
+      "teaches": "Keep the test in scope",
+      "pause_after": 0.3
+    },
+    {
+      "id": "s7",
+      "narration": "Multiple attention views help here. The best head count still needs testing for each task.",
+      "visual": {
+        "type": "process",
+        "title": "Find the useful number of views",
+        "source": "Table 3 / Section 6.2",
+        "concept": {
+          "kind": "parallel_paths",
+          "branches": 8,
+          "input_label": "Representation",
+          "branch_label": "heads",
+          "output_label": "Translation",
+          "y_label": "Dev. BLEU",
+          "previous_branches": 1,
+          "points": []
+        },
+        "cue_phrases": {
+          "branches": "Multiple attention views"
+        }
+      },
+      "est_seconds": 6.25,
+      "beat": "payoff",
+      "teaches": "A design choice to test",
+      "pause_after": 0.3
+    }
+  ]
+}
