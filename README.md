@@ -508,3 +508,16 @@ fallback rather than a fabricated visual explanation. Classic mode shows the
 finished diagram. The curated preview uses concept animation in all seven scenes
 and no title cards or bullet slides. Existing narration is reused; this redesign
 requires no new LLM or speech calls.
+
+### Slower diagram review, without new narration
+
+```bash
+python demos/5_slow_preview.py --source demos/out/transformer-final --output demos/out/transformer-calm
+```
+
+This local-only pass plays existing picture and speech at 0.8x (preserving voice
+pitch), then holds each completed scene in silence for 1.5 seconds. The reviewed
+example grows from 44.8 to 66.5 seconds. `--rate` and `--hold` adjust those choices.
+It preserves the original and refuses an already-retimed source. Its new pacing
+report scales cue times with the video and records the added reading holds.
+This is a preview edit, not a new speech-generation request or provider setting.

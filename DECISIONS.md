@@ -1822,3 +1822,18 @@ encoding. Rendering is deterministic under seeking.
 Cost instruction from owner: be very mindful of spending and report when/how
 money is spent. This redesign uses zero external API calls and stays at $0 API
 spend. Before a future paid call, state provider, purpose, estimated cost, and cap.
+
+## D44 - Give the viewer time to inspect the diagram
+
+The owner found the diagram-first version much too fast. The reviewed slower
+cut uses the existing encoded picture and narration at 0.8x, with a 1.5-second
+silent hold after every scene. It runs 66.5 seconds instead of 44.8. Local ffmpeg
+preserves voice pitch, scales picture/audio together, and freezes the completed
+diagram during each hold. No LLM or TTS calls were made ($0 API spend).
+
+The offline demo utility retains the original and refuses cumulative retiming.
+It checks source/report duration agreement, writes a new timing report, and keeps
+old pacing flags as history rather than claiming a fresh heuristic review.
+These are review-cut settings; provider synthesis defaults are unchanged.
+Future pacing should budget time for understanding an animation, not merely
+fitting narration between cuts. This revised cut is awaiting the owner's review.
