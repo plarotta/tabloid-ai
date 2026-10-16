@@ -156,6 +156,7 @@ class RenderStage(Stage):
 		out_dir.mkdir(parents=True, exist_ok=True)
 		slides = []
 		diagram_values = {}
+		diagram_states = {}
 		for i, clip in enumerate(audio.scenes):
 			scene = by_id.get(clip.scene_id)
 			if scene is None:
@@ -167,8 +168,11 @@ class RenderStage(Stage):
 
 				cues, cue_warnings = reveal_cues(scene, clip)
 				previous_values = {}
+				previous_states = {}
 				if diagram := scene.visual.diagram:
 					previous_values = diagram_values.get(diagram.id, {})
+					previous_states = diagram_states.get(diagram.id, {})
+					diagram_states[diagram.id] = {n.id: n.state for n in diagram.nodes}
 					diagram_values[diagram.id] = {n.id: n.value for n in diagram.nodes}
 				for warning in cue_warnings:
 					log.warning("%s/%s: %s", label, scene.id, warning)
@@ -186,6 +190,7 @@ class RenderStage(Stage):
 					timeout=cfg.animate_timeout_seconds,
 					cues=cues,
 					previous_values=previous_values,
+					previous_states=previous_states,
 				)
 				if moving is not None:
 					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))

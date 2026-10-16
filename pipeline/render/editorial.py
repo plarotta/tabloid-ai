@@ -58,6 +58,13 @@ class Layer:
 	at: float
 	seconds: float
 	mode: str = "rise"
+	until: float | None = None
+
+	def progress(self, seconds: float) -> float:
+		p = ease((seconds - self.at) / max(self.seconds, 0.001))
+		if self.until is not None:
+			p *= 1 - ease((seconds - self.until) / max(self.seconds, 0.001))
+		return p
 
 
 class EditorialScene:
@@ -70,10 +77,12 @@ class EditorialScene:
 		duration: float,
 		cues: dict[str, float] | None = None,
 		previous_values: dict[str, str] | None = None,
+		previous_states: dict[str, str] | None = None,
 	):
 		self.scene, self.ctx = scene, ctx
 		self.cues = cues or {}
 		self.previous_values = previous_values or {}
+		self.previous_states = previous_states or {}
 		self.duration = max(duration, 0.001)
 		self.layers: list[Layer] = []
 		self.base = self._ground()
@@ -311,46 +320,43 @@ class EditorialScene:
 			)
 			self.text(d, node.label, (x + 28, 520, x + width - 28, 625), 66)
 			if previous := self.previous_values.get(node.id):
-				self.text(d, previous, (x + 28, 652, x + width - 28, 735), 54, ACCENT)
-		# All nodes exist before state layers, so connector masks never erase labels.
+				self.text(
+					d,
+					previous,
+					(x + 28, 652, x + width - 28, 735),
+					54,
+					BASE_TEXT if self.previous_states.get(node.id) == "removed" else ACCENT,
+				)
+		# Keep previous state layers alive until their replacement is introduced.
+		focus = next((n for n in nodes if n.state == "focus"), None)
 		for i, node in enumerate(nodes):
 			x = 112 + i * (width + gap)
-			image, overlay = self.canvas()
-			color = BASE if node.state == "removed" else ACCENT
-			if node.state != "normal":
-				overlay.rounded_rectangle(
-					self.rect((x, 416, x + width, 763)),
-					radius=self.size(22),
-					outline=color,
-					width=self.size(5),
-				)
-				self.text(
-					overlay,
-					"REMOVED" if node.state == "removed" else "FOCUS",
-					(x + 28, 446, x + width - 28, 505),
-					38,
-					BASE_TEXT if node.state == "removed" else ACCENT,
-				)
-			if node.state == "removed":
-				for left in ([x - gap] if i else []) + ([x + width] if i + 1 < len(nodes) else []):
-					box = self.rect((left + 3, 568, left + gap - 3, 611))
-					image.paste(ground.crop(box), box[:2])
-					for offset in (16, 50):
-						overlay.line(
-							self.rect((left + offset, 590, left + offset + 16, 590)),
-							fill=BASE,
-							width=self.size(4),
+			at = self.cues.get(f"node:{node.id}", (0.08 + 0.15 * i) * self.duration)
+			previous = self.previous_states.get(node.id, "normal")
+			if previous == node.state:
+				state_image = self._diagram_state(node.state, x, width, gap, i, len(nodes), ground)
+				self.base.paste(state_image, (0, 0), state_image)
+			else:
+				# Transfer focus when its destination is introduced, not at the cut.
+				state_at = at
+				if previous == "focus" and node.state == "normal" and focus:
+					j = nodes.index(focus)
+					state_at = self.cues.get(f"node:{focus.id}", (0.08 + 0.15 * j) * self.duration)
+				seconds = min(0.48, self.duration * 0.12, max(0.001, self.duration - state_at))
+				for state, old in ((previous, True), (node.state, False)):
+					image = self._diagram_state(state, x, width, gap, i, len(nodes), ground)
+					if box := image.getbbox():
+						self.layers.append(
+							Layer(
+								image.crop(box),
+								box[:2],
+								-seconds if old else state_at,
+								seconds,
+								"fade",
+								state_at if old else None,
+							)
 						)
-				overlay.line(
-					self.rect((x + width - 58, 442, x + width - 28, 472)),
-					fill=BASE,
-					width=self.size(4),
-				)
-				overlay.line(
-					self.rect((x + width - 58, 472, x + width - 28, 442)),
-					fill=BASE,
-					width=self.size(4),
-				)
+			image, overlay = self.canvas()
 			if self.previous_values.get(node.id):
 				overlay.rectangle(
 					self.rect((x + 24, 646, x + width - 24, 740)), fill=mix(BG, ACCENT, 0.07)
@@ -369,6 +375,45 @@ class EditorialScene:
 			self.text(overlay, v.highlight, (116, 814, 1800, 924), 50, FG)
 			self.add(image, 0.58, "fade", cue="highlight")
 		self._source("Method schematic")
+
+	def _diagram_state(self, state, x, width, gap, i, count, ground):
+		image, overlay = self.canvas()
+		color = BASE if state == "removed" else ACCENT
+		if state != "normal":
+			overlay.rounded_rectangle(
+				self.rect((x, 416, x + width, 763)),
+				radius=self.size(22),
+				outline=color,
+				width=self.size(5),
+			)
+			self.text(
+				overlay,
+				"REMOVED" if state == "removed" else "FOCUS",
+				(x + 28, 446, x + width - 28, 505),
+				38,
+				BASE_TEXT if state == "removed" else ACCENT,
+			)
+		if state == "removed":
+			for left in ([x - gap] if i else []) + ([x + width] if i + 1 < count else []):
+				box = self.rect((left + 3, 568, left + gap - 3, 611))
+				image.paste(ground.crop(box), box[:2])
+				for offset in (16, 50):
+					overlay.line(
+						self.rect((left + offset, 590, left + offset + 16, 590)),
+						fill=BASE,
+						width=self.size(4),
+					)
+			overlay.line(
+				self.rect((x + width - 58, 442, x + width - 28, 472)),
+				fill=BASE,
+				width=self.size(4),
+			)
+			overlay.line(
+				self.rect((x + width - 58, 472, x + width - 28, 442)),
+				fill=BASE,
+				width=self.size(4),
+			)
+		return image
 
 	def _contrast(self) -> None:
 		v = self.scene.visual
@@ -492,7 +537,7 @@ class EditorialScene:
 	def frame(self, seconds: float) -> Image.Image:
 		image = self.base.copy()
 		for layer in self.layers:
-			p = ease((seconds - layer.at) / max(layer.seconds, 0.001))
+			p = layer.progress(seconds)
 			if p <= 0:
 				continue
 			piece, (x, y) = layer.image, layer.xy
@@ -520,6 +565,7 @@ def render_clip(
 	timeout: int = 120,
 	cues: dict[str, float] | None = None,
 	previous_values: dict[str, str] | None = None,
+	previous_states: dict[str, str] | None = None,
 ) -> Path | None:
 	"""Encode cached layers in a bounded worker; failures leave a usable poster.
 
@@ -543,6 +589,7 @@ def render_clip(
 					"fps": fps,
 					"cues": cues or {},
 					"previous_values": previous_values or {},
+					"previous_states": previous_states or {},
 				},
 				default=str,
 			),
@@ -605,7 +652,7 @@ def _encode(design: EditorialScene, out: Path, duration: float, fps: int) -> Non
 			last_key, data = None, b""
 			for i in range(frames):
 				t = i / fps
-				key = tuple(round(ease((t - x.at) / x.seconds), 5) for x in design.layers)
+				key = tuple(round(x.progress(t), 5) for x in design.layers)
 				if key != last_key:
 					data = design.frame(t).tobytes()
 					last_key = key
@@ -631,5 +678,6 @@ if __name__ == "__main__":
 		payload["duration"],
 		payload.get("cues"),
 		payload.get("previous_values"),
+		payload.get("previous_states"),
 	)
 	_encode(design, Path(payload["out"]), payload["duration"], payload["fps"])

@@ -479,3 +479,8 @@ validate timing direction, not whether a scientific claim is true.
 The curated Transformer example also cues all three method steps and three
 limitations in spoken order. Its existing seven narration files can be reused
 with `--curated --reuse-audio`; no new synthesis is necessary for visual edits.
+
+Diagram continuity also preserves focus/removal states between scenes. A removed
+component stays marked and disconnected until its restoration cue; an unchanged
+focus does not blink at a cut. Focus transfers when the destination is introduced.
+The same diagram can return after another layout without losing its state.

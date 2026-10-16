@@ -105,3 +105,54 @@ def test_node_text_has_readable_contrast():
 	background = design.base.getpixel((design.x(150), design.y(740)))
 	light, dark = sorted([luminance(FG), luminance(background)], reverse=True)
 	assert (light + 0.05) / (dark + 0.05) >= 4.5
+
+
+def test_removed_state_survives_cut_until_restoration_cue():
+	scene = continuity_manifest().scenes[3].model_copy(deep=True)
+	ctx = SlideContext(width=640, height=360)
+	previous = {n.id: n.state for n in scene.visual.diagram.nodes}
+	removed = EditorialScene(scene, ctx, 5)
+	for node in scene.visual.diagram.nodes:
+		node.state = "normal"
+	cues = {f"node:{n.id}": 3 for n in scene.visual.diagram.nodes}
+	restored = EditorialScene(scene, ctx, 5, cues=cues, previous_states=previous)
+	# Connector and marker stay removed across the cut, including backward seeks.
+	for coords in [(630, 568, 710, 611), (710, 440, 1200, 505)]:
+		box = restored.rect(coords)
+		before = restored.frame(0).crop(box).tobytes()
+		assert before == removed.poster().crop(box).tobytes()
+		assert before == restored.frame(2.9).crop(box).tobytes()
+		assert before != restored.frame(4).crop(box).tobytes()
+		assert before == restored.frame(0).crop(box).tobytes()
+		assert (
+			restored.poster().crop(box).tobytes()
+			== EditorialScene(scene, ctx, 5).poster().crop(box).tobytes()
+		)
+
+
+def test_unchanged_focus_does_not_blink_and_handoff_waits_for_destination():
+	scenes = continuity_manifest().scenes
+	ctx = SlideContext(width=640, height=360)
+	previous = {n.id: n.state for n in scenes[0].visual.diagram.nodes}
+	old_focus = next(key for key, value in previous.items() if value == "focus")
+	unchanged = EditorialScene(scenes[0], ctx, 5, previous_states=previous)
+	box = unchanged.rect((140, 440, 590, 505))
+	assert unchanged.frame(0).crop(box).tobytes() == unchanged.poster().crop(box).tobytes()
+	new_focus = next(n.id for n in scenes[1].visual.diagram.nodes if n.state == "focus")
+	assert new_focus != old_focus
+	handoff = EditorialScene(
+		scenes[1], ctx, 5, cues={f"node:{new_focus}": 3}, previous_states=previous
+	)
+	assert handoff.frame(0).crop(box).tobytes() == handoff.frame(2.9).crop(box).tobytes()
+	assert handoff.frame(0).crop(box).tobytes() != handoff.frame(4).crop(box).tobytes()
+
+
+def test_fading_out_state_changes_encoder_frame_cache_key():
+	from PIL import Image
+
+	from pipeline.render.editorial import Layer
+
+	layer = Layer(Image.new("RGBA", (2, 2), "white"), (0, 0), -0.4, 0.4, "fade", 3)
+	assert layer.progress(0) == layer.progress(2.9) == 1
+	assert 0 < layer.progress(3.2) < 1
+	assert layer.progress(3.5) == 0

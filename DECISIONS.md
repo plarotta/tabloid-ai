@@ -1774,3 +1774,22 @@ The previous GitHub CI was cancelled during apt installation before any tests
 ran. CI now checks its required ffmpeg/font dependencies first and installs only
 when missing, with bounded package-manager steps. It still independently verifies
 those dependencies before tests; no render tests are skipped by this change.
+
+## D42 - Preserve state, not only values, across a cut
+
+Continued video-flow review found that persistent diagrams retained numeric
+values but reset focus/removal decoration at every scene boundary. This could
+briefly reconnect a removed component before the next narrated change.
+
+The renderer now remembers node states per diagram alongside values, including
+when another layout intervenes. Unchanged states remain present from frame zero.
+Changed states dissolve from their previous appearance at the new node's cue;
+outgoing focus follows the incoming focus cue. Labels and positions remain fixed.
+Old removal markers and broken connectors survive until restoration is actually
+introduced. Fade-out progress participates in the frame cache so encoded video
+cannot freeze a disappearing state. The static fallback still shows the complete
+current scene, and old manifests require no new fields.
+
+Regression checks cover removal/restoration, unchanged focus, cue-timed focus
+handoff, backward seeking, and fade-out progress. The real-paper preview is
+rerendered from the existing narration without paid provider calls.
