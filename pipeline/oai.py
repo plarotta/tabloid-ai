@@ -142,8 +142,7 @@ def parse_record(record: ET.Element) -> Paper | None:
 	dates = [
 		d
 		for d in (
-			_rfc2822(v.findtext("raw:date", namespaces=NS))
-			for v in meta.findall("raw:version", NS)
+			_rfc2822(v.findtext("raw:date", namespaces=NS)) for v in meta.findall("raw:version", NS)
 		)
 		if d is not None
 	]

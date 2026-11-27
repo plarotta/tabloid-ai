@@ -78,8 +78,7 @@ def _xfade_chain(n: int, hold: float, fade: float) -> tuple[str, str]:
 	for i in range(1, n):
 		cum += hold
 		parts.append(
-			f"[{prev}][s{i}]xfade=transition=fade:duration={fade:.3f}:"
-			f"offset={cum - fade:.3f}[x{i}]"
+			f"[{prev}][s{i}]xfade=transition=fade:duration={fade:.3f}:offset={cum - fade:.3f}[x{i}]"
 		)
 		prev = f"x{i}"
 	return ";".join(parts), prev

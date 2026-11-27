@@ -98,9 +98,7 @@ def generate(
 		from openai import OpenAI
 
 		client = OpenAI(timeout=timeout)
-		resp = client.images.generate(
-			model=model, prompt=prompt, size=size, quality=quality, n=1
-		)
+		resp = client.images.generate(model=model, prompt=prompt, size=size, quality=quality, n=1)
 		payload = resp.data[0].b64_json if resp.data else None
 		if not payload:
 			log.warning("Image model returned no data; the title card stays flat")
