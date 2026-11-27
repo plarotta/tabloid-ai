@@ -2036,6 +2036,51 @@ real hard-cut/dissolve timing. A fresh LLM-scripted and ElevenLabs-narrated
 episode was not generated: those API credentials were absent. That live review
 is the remaining creative validation, rather than a hidden pass in this log.
 
+
+## D48 - Two lines of work, one pipeline
+
+PR #1 ("Improve storytelling, pacing, and editorial motion", merged to `main`
+2026-09-19) and `craft/ep8-prep` (D39-D46) both grew from `e9efdea` and changed
+the same stages for two months without seeing each other. They collided in ten
+files, and in places they disagreed on purpose: a 9-second two-beat cold open
+against a 20-second three-scene one, no outro against one, 3-second bridges
+against 6, 65-second segments against 70, and two different script `v8` and
+episode `v6` prompts under the same version numbers.
+
+**The owner chose the craft branch's editorial direction** (2026-11-26): its
+pacing came out of the Ep. 5-8 reviews, and its prompts (script v8-v10, episode
+v6-v9) carry the 21 templates. PR #1's code came across wherever it did not
+contradict that:
+
+  - `pipeline run --through`, `pipeline review` and the pacing report
+  - `pipeline demo` and the editorial renderer, as `render.visual_style:
+    editorial` - an opt-in. The default is `classic`, because editorial mode
+    bypasses manim entirely and none of D46's templates would ever draw
+  - ElevenLabs continuity (`previous_text`/`next_text`) **combined with** D42's
+    per-scene voice settings; both now reach the API on the same call
+  - the optional `beat`, `pause_after` and `source` scene fields, the `process`
+    and `contrast` visual types, and `allow_inf_nan=False` on comparison values
+
+**What would have broken silently.** Three things passed the merge without a
+conflict marker and would have failed at runtime or not at all:
+
+  - `config.yaml` took `visual_style: editorial` from PR #1 without conflict,
+    which would have turned off every animated template in the next episode.
+  - The editorial engine draws three templates and treated any other as a
+    single number - `None` for the label-only ones, a crash. It now falls back
+    to the static callout for the other eighteen (tested for all twenty-one).
+  - The base TTS client's `synthesize_with_context` dropped per-scene settings,
+    and every provider inherits it, so D42's voice variation would have stopped
+    reaching ElevenLabs with no error.
+
+PR #1's prompts are kept in `prompts/*/superseded/`, outside what `load_prompt`
+reads; its D38 is D47 here. Its story-role structure (hook, context, mechanism,
+evidence, caveat, payoff) is the most likely part worth porting into a later
+script version, since `pipeline review` reads `beat` and the current prompts do
+not ask for it.
+
+---
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
