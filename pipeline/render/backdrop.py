@@ -32,15 +32,19 @@ log = logging.getLogger(__name__)
 
 # Bans first, because an image model will reach for a chart the moment the
 # subject sounds scientific, and a chart on this channel is a claim.
+# The opener's visual family (D51): paper sheets turning into filaments of
+# light in the series palette, so the wrapper's cards read as part of the same
+# title sequence. Still abstract, still banned from looking like evidence (D39).
 STYLE = (
-	"Abstract non-representational texture for a video title card background. "
-	"Very dark near-black ground (#161A21) with restrained cool blue accents. "
-	"Soft geometric forms, fine grain, deep negative space, out-of-focus depth. "
-	"Editorial and quiet, not futuristic, not neon, not a tech stock image. "
+	"Cinematic abstract 3D artwork in the style of a premium science-documentary "
+	"title sequence. A few thin white paper sheets drift through deep near-black "
+	"navy space (#161A21) and dissolve into glowing filaments of light in electric "
+	"blue (#7AA2F7) with touches of mint (#58D4AC), rose (#F77E9C) and violet "
+	"(#AA92FF). Volumetric light, shallow depth of field, subtle film grain. "
 	"Absolutely no text, letters, numbers, charts, graphs, plots, diagrams, "
 	"arrows, UI, screens, robots, brains, people, hands or logos. "
-	"The left two thirds must stay almost empty and very dark so white type can "
-	"sit on it."
+	"All the light and detail sits in the right third; the left two thirds stay "
+	"dark, calm negative space for white type."
 )
 
 
@@ -73,7 +77,7 @@ def generate(
 	cache_dir: Path,
 	tracker=None,
 	stage: str = "render",
-	model: str = "gpt-image-1",
+	model: str = "gpt-image-2",
 	size: str = "1536x1024",
 	quality: str = "medium",
 	timeout: int = 120,
@@ -107,6 +111,15 @@ def generate(
 	except Exception as e:
 		# Includes refusals, rate limits, timeouts and SDK changes. A title card
 		# without a backdrop is the slide this pipeline shipped for four episodes.
+		if "does not exist" in str(e):
+			# Not a transient failure and not the key: OpenAI retires image models.
+			# This is how gpt-image-1 failed silently for every episode (D51).
+			log.error(
+				"Image model %r no longer exists for this key; set render.backdrop_model "
+				"to a current one (GET /v1/models lists them). The title card stays flat",
+				model,
+			)
+			return None
 		log.warning("Backdrop generation failed (%s); the title card stays flat", e)
 		return None
 

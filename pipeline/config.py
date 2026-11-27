@@ -215,6 +215,9 @@ class RenderConfig(StrictModel):
 	# then a push into the panel with the rest dimmed (D50). Needs the same
 	# per-slide path as reveals; falls back to the reveal or the still.
 	figure_tour: bool = True
+	# The cold open's first scene as a title sequence over the series artwork in
+	# assets/opener/ (D51). Without the artwork it is the title card as before.
+	opener: bool = True
 	# Per clip. A template takes ~3s at 1080p30; this is the point at which a
 	# scene is not worth waiting for and the still is used instead.
 	animate_timeout_seconds: int = 120
@@ -222,7 +225,7 @@ class RenderConfig(StrictModel):
 	# `openai` extra; without either, or on any failure, the flat card is drawn.
 	# Cached per run by prompt hash, so only the first render of a run pays.
 	title_backdrops: bool = True
-	backdrop_model: str = "gpt-image-1"
+	backdrop_model: str = "gpt-image-2"
 	# Off by default: no licensed track could be sourced, and the synthesised
 	# fallback reads as hum once it is audible. Drop a track at assets/music/ and
 	# enable this. See DECISIONS.md D21.

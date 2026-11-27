@@ -57,3 +57,6 @@ audio:
 image:
   openai:
     gpt-image-1: {per_image: 0.063}
+    # Unverified, like the row above: 1,372 output image tokens for a medium
+    # 1536x1024 render (measured 2026-11-27), priced as gpt-image-1's $40/M.
+    gpt-image-2: {per_image: 0.055}

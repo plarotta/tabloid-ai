@@ -38,15 +38,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
-from ..render import animate, camera, captions, editorial, reveal
+from ..render import animate, camera, captions, editorial, opener, reveal
 from ..render import backdrop as backdrops
 from ..render.captions import Cue
 from ..render.slides import BG as SLIDE_BG
 from ..render.slides import SlideContext, render_visual
 from ..schemas import RenderedSegment, RenderResult, SceneManifest, SegmentAudio
 from ..stage import Stage, StageError
+from .script import SERIES_NAME
 
 log = logging.getLogger(__name__)
+
+_NUMBER_WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five"}
 
 # How far each slide type zooms over its own duration. Figures earn the most:
 # they are the one thing on screen a viewer actually studies, and a still
@@ -204,8 +207,30 @@ class RenderStage(Stage):
 					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))
 					continue
 
-			# A figure the script pointed at a panel of gets the camera (D50).
 			v = scene.visual
+			# The episode's first seconds: a title sequence, not a card (D51).
+			is_opener = (
+				i == 0
+				and manifest.arxiv_id == "episode"
+				and v.type == "title_card"
+				and SERIES_NAME.lower() in (v.title or "").lower()
+			)
+			if revealing and cfg.opener and is_opener:
+				n = getattr(self, "_paper_count", 0)
+				kicker = f"{_NUMBER_WORDS.get(n, str(n))} new papers" if n else ""
+				opened = opener.render_opener(
+					ctx,
+					v.title or SERIES_NAME,
+					kicker,
+					clip.duration_seconds + hold,
+					out_dir / f"{i:03d}_{scene.id}.mp4",
+					fps=cfg.fps,
+					timeout=cfg.animate_timeout_seconds,
+				)
+				if opened is not None:
+					slides.append(Slide(opened, v.type, scene.narration, animated=True))
+					continue
+			# A figure the script pointed at a panel of gets the camera (D50).
 			if revealing and cfg.figure_tour and v.type == "figure" and v.focus:
 				toured = self._tour(v, ctx, clip.duration_seconds + hold, out_dir, i, scene.id)
 				if toured is not None:
@@ -263,6 +288,10 @@ class RenderStage(Stage):
 		this stage invites stay free after the first (D39).
 		"""
 		if not self.config.render.title_backdrops or visual.type != "title_card":
+			return None
+		if ctx.paper_index is not None:
+			# A paper's title card is a chapter card and draws no backdrop (D50);
+			# asking for one bought three unused images on the first D51 render.
 			return None
 		subject = visual.title or ctx.segment_label or ctx.eyebrow
 		return backdrops.generate(
@@ -1015,6 +1044,7 @@ class RenderStage(Stage):
 		# the same index the full episode would have given it, or the standalone
 		# file comes out a different colour from the one inside the episode.
 		order = {s.arxiv_id: i for i, s in enumerate(voice.segments)}
+		self._paper_count = len(voice.segments)
 		if not self.ctx.paper_filter:
 			for name, audio in (("cold_open", voice.cold_open), ("outro", voice.outro)):
 				manifest = getattr(script.episode, name, None)

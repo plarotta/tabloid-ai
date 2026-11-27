@@ -322,8 +322,10 @@ def backdrop_ground(ctx: SlideContext, path: Path) -> Image.Image:
 		log.warning("Backdrop %s unusable (%s); using the flat ground", path, e)
 		return Image.new("RGB", (ctx.width, ctx.height), BG)
 
-	art = ImageEnhance.Color(art).enhance(0.35)
-	art = ImageEnhance.Brightness(art).enhance(0.62)
+	# Pushed back less than D39 did (0.35 / 0.62): with the opener's artwork on
+	# the right third only, the scrim alone keeps the type legible (D51).
+	art = ImageEnhance.Color(art).enhance(0.8)
+	art = ImageEnhance.Brightness(art).enhance(0.85)
 
 	# One row of the gradient, stretched: the scrim varies across x only.
 	row = Image.new("L", (ctx.width, 1))
@@ -583,7 +585,12 @@ def result_callout(
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.fitted(430), start=ctx.scaled(132))
+	# Sized to what it holds (D51). A flat 132px cap drew a bare "69.5%" at the
+	# size of an eight-word phrase, a small number adrift in the frame - and the
+	# cold open's third scene is exactly that: the episode's biggest number.
+	n = len(highlight or "")
+	start = 300 if n <= 8 else 200 if n <= 18 else 132
+	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.fitted(430), start=ctx.scaled(start))
 	cf = regular(ctx.scaled(34))
 	cap_lines = wrap(d, caption, cf, int(box * 0.8)) if caption else []
 

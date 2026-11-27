@@ -982,7 +982,7 @@ def test_a_cached_backdrop_is_not_generated_twice(monkeypatch, tmp_path):
 	key = backdrop.prompt_for("A subject")
 	import hashlib
 
-	h = hashlib.sha256(f"gpt-image-1|1536x1024|medium|{key}".encode()).hexdigest()[:16]
+	h = hashlib.sha256(f"gpt-image-2|1536x1024|medium|{key}".encode()).hexdigest()[:16]
 	(tmp_path / f"{h}.png").write_bytes(b"CACHED")
 
 	def explode(*a, **k):

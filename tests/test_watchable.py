@@ -265,3 +265,54 @@ def test_a_callout_number_lands_after_a_beat_not_half_the_scene():
 	assert _holds(callout, [0, 1], 8.0) == [LEAD_IN, 8.0 - LEAD_IN]
 	bullets = Visual.model_validate({"type": "bullet_slide", "bullets": ["a", "b"]})
 	assert _holds(bullets, [1, 2], 8.0) == [4.0, 4.0]
+
+
+def test_a_chapter_card_never_asks_for_a_backdrop(ctx, monkeypatch):
+	from pipeline.render import backdrop
+	from pipeline.stages.render import RenderStage
+
+	monkeypatch.setattr(backdrop, "generate", lambda *a, **k: pytest.fail("billed for a backdrop"))
+	v = Visual.model_validate({"type": "title_card", "title": "A hook"})
+	assert RenderStage(ctx)._backdrop_for(v, SlideContext(paper_index=0)) is None
+
+
+def test_the_opener_is_a_title_sequence_of_exact_length(tmp_path):
+	if shutil.which("ffmpeg") is None:
+		pytest.skip("needs ffmpeg")
+	from pipeline.render.opener import render_opener
+
+	art = tmp_path / "art.png"
+	Image.new("RGB", (300, 200), (40, 60, 120)).save(art)
+	out = render_opener(
+		SlideContext(width=320, height=180),
+		"ML Papers of the Day",
+		"Three new papers",
+		2.0,
+		tmp_path / "o.mp4",
+		fps=10,
+		art=art,
+	)
+	assert out is not None
+	frames = subprocess.run(
+		[
+			"ffprobe",
+			"-v",
+			"error",
+			"-count_frames",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=nb_read_frames",
+			"-of",
+			"csv=p=0",
+			str(out),
+		],
+		capture_output=True,
+		text=True,
+		check=True,
+	).stdout.strip()
+	assert int(frames) == 20
+	assert (
+		render_opener(SlideContext(), "x", "", 2.0, tmp_path / "n.mp4", art=tmp_path / "no.png")
+		is None
+	)

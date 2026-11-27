@@ -2226,6 +2226,52 @@ paper's dense overview page, which at feed size is grey texture. Now:
 **Spend.** v11 script runs: $0.13 (failed on `focus: null`), $0.23, $0.20;
 fact-check replay $0.025; narration for the full re-render ~$0.44.
 
+## D51 - An opening title sequence, and why the backdrops never worked
+
+Owner, 2026-11-27: the "ML Papers of the Day" slide "is still too boring. it
+needs to be original and captivating", and "whats up with the gpt image 1
+failure? ... the key should be fine".
+
+**The key was fine; the model was gone.** Every backdrop request since D39
+returned `400 The model 'gpt-image-1' does not exist` (`param: model`). OpenAI
+retired it; the key authenticates and `GET /v1/models` lists `gpt-image-2`,
+`gpt-image-1.5`, `gpt-image-1-mini` and newer variants. `render.backdrop_model`
+is now `gpt-image-2`. Because the failure was logged as a warning and the card
+fell back to flat ground by design, it shipped invisibly for every episode; a
+"does not exist" error is now logged as an error naming the setting to change.
+One medium 1536x1024 image measured 1,372 output image tokens; priced in
+`pricing.yaml` at $0.055, unverified.
+
+**The opener is a title sequence, not a card.** `render/opener.py`: ~3 seconds,
+fading up from black onto series artwork with a slow push toward its light,
+"ML Papers" then "of the Day" rising in, an accent rule wiping in under them
+and a kicker ("Three new papers"). The artwork is a **series asset**,
+`assets/opener/opener.png`, generated once with `gpt-image-2` and committed - a
+show has one opening, and regenerating it weekly would cost money and lose the
+identity. Swap the file to change it; delete it and the old title card returns.
+
+The wrapper's other title cards (the thesis, the outro) take backdrops in the
+same visual family - the D39 prompt asked for near-black texture and the
+composite then darkened it further, so the images were barely visible; the
+style block now matches the opener and the push-back is lighter. Paper title
+cards are chapter cards (D50) and no longer request a backdrop at all.
+
+**The cold open's number is drawn at its size.** `result_callout` capped type at
+132px whatever it held, so "69.5%" - the episode's single biggest number - sat
+small in an empty frame. Type now starts at 300px for up to eight characters.
+
+**A test leak that billed.** The CLI tests call `load_dotenv()`, which put the
+real `OPENAI_API_KEY` into the environment for every later test. While
+`gpt-image-1` was dead that cost nothing; the moment `gpt-image-2` worked, the
+render tests generated real images - about fifteen across three suite runs
+(~$0.80 at the unverified price) before the slowdown (28s -> 140s) gave it away.
+`tests/conftest.py` now clears every provider key and stubs `load_dotenv` for
+every test.
+
+**Spend:** ~25 images at ~$0.055 - one test image, six on the first render
+(three of them for chapter cards that never drew them), ~15 from the test leak,
+three on the final render - about $1.38, unverified against OpenAI's billing.
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
