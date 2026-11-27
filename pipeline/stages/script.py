@@ -83,8 +83,50 @@ def _detach_comparisons(payload: object) -> dict[str, object]:
 	return held
 
 
+_NUMBER_WORDS = [
+	"zero",
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine",
+	"ten",
+	"eleven",
+	"twelve",
+	"thirteen",
+	"fourteen",
+	"fifteen",
+	"sixteen",
+	"seventeen",
+	"eighteen",
+	"nineteen",
+	"twenty",
+]
+
+
 def _states(value: float, text: str) -> bool:
-	return re.search(rf"(?<!\d){re.escape(f'{value:g}')}(?!\d)", text) is not None
+	"""Whether `text` states `value`, as digits or - for a small whole number - a word.
+
+	Matched on magnitude: a digest writes a negative cosine with a typographic
+	minus as often as a hyphen, and the sign is drawn from the value either way.
+	The word form exists for `fraction`, whose "nine of ten models" is how a
+	digest says it far more often than "9 of 10" (D46).
+	"""
+	v = abs(value)
+	# "2,518" states 2518. Only a comma between a digit and exactly three more
+	# is a separator; "3,4" in a list of section numbers is left alone.
+	text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+	# Not `:g`, which writes 1234567 as "1.23457e+06" and so could never match.
+	if re.search(rf"(?<!\d){re.escape(format(v, '.15g'))}(?!\d)", text):
+		return True
+	# Not zero or one: "one" is in every digest, so it would back any claim of 1.
+	if v == int(v) and 2 <= v < len(_NUMBER_WORDS):
+		return re.search(rf"\b{_NUMBER_WORDS[int(v)]}\b", text, re.IGNORECASE) is not None
+	return False
 
 
 # `est_seconds` is the script's own budget arithmetic - words at
@@ -223,17 +265,12 @@ class ScriptStage(Stage):
 			c = scene.visual.comparison
 			if c is None:
 				continue
-			missing = [
-				f"{v:g}"
-				for v in (c.value_a, c.value_b, c.steps)
-				if v is not None and not _states(v, digest_text)
-			]
+			missing = [f"{v:g}" for v in c.values() if not _states(v, digest_text)]
 			# A curve needs somewhere to fall to and a distance to fall over;
 			# without either it is a line, and a line is not the claim.
 			if not missing and c.template == "decay_curve" and (c.value_b is None or not c.steps):
 				log.warning(
-					"%s/%s: decay_curve needs value_b and steps; "
-					"rendering it as a static callout",
+					"%s/%s: decay_curve needs value_b and steps; rendering it as a static callout",
 					manifest.arxiv_id,
 					scene.id,
 				)

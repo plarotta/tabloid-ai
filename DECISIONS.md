@@ -1869,6 +1869,97 @@ unchanged - Stage 2 only ever sees what survives the filter - and the harvest
 itself is free.
 
 
+## D46 - Twenty-one templates, fitted to what the callouts actually said
+
+Asked for by the owner on 2026-11-26: "add way more templates". D37 argued for
+keeping the set small, and that argument was about *unchecked* surface - a
+template whose numbers are all verified against the digest adds drawing code,
+not risk. So the set grew from four to twenty-one, and the field set grew by
+much less.
+
+**Fitted, not brainstormed.** Every static `result_callout` and `bullet_slide`
+across the twelve runs from 2026-08-07 to 2026-09-18 (~150 scenes) was read and
+grouped by the shape of its claim. The four existing templates covered about
+fifteen. The new ones each answer a shape that recurred:
+
+| shape | example from a shipped episode | template |
+|---|---|---|
+| before → after | HarmBench 58% → 32.5% | `delta` |
+| two values on one scale | best agent 57%, humans 85% | `gap` |
+| a reported span | 27-29% attack success; 1.55x-6.87x | `range` |
+| a ratio | "seventy times smaller"; 3.6x base rate | `multiplier` |
+| k of n | 9 of 10 models; 16/16 judgments | `fraction` |
+| a small share | 2.5% trial-grade | `waffle` |
+| three or more contenders | RL 19, SFT 17, base 13 | `ranking` |
+| a pass mark | above 60% baseline, models lose more | `threshold` |
+| attrition | 11,628 records → trial-grade | `funnel` |
+| ordered values | gap at 10 / 25 / 50 / 100 steps | `trend` |
+| the scale of a study | 48,662 questions, 8 benchmarks, 10 models | `stat_row` |
+| a breakdown | 46% reasoning, 24% action faults | `stack` |
+| a bounded measure | cosine 0.12 and 0.21 | `scale` |
+| two conditions, several items | sham vs real relief, per model | `slope` |
+| a method | force → Jacobian → generalized force → update | `flow` |
+| a loop | validate → explore → plan | `cycle` |
+| a distinction | reliability ≠ validity | `versus` |
+
+**What did not get a template**, and why: orders of magnitude on a log axis
+(one paper, and its values were written as `6.5×10⁻⁵`, which the digest check
+cannot match); rank movement (positions are rarely in a digest); 2x2 quadrants
+and Venn nesting (label-only, and the semantic risk grows with every region).
+
+**The digest check now covers every drawn number** - item values, thresholds,
+step counts - through one `Comparison.values()`. One invented item drops the
+whole chart: a ranking of three real values and one guessed one is a chart of a
+guess. Two loosenings, both narrow: a value matches on magnitude (digests write
+a negative cosine with a typographic minus), and whole numbers from two to
+twenty match their word, because `fraction` claims are "nine of ten" in a
+digest far more often than "9 of 10". Not one: "one" is in every digest.
+
+**Axes are not the model's to set.** `gap`, `range` and `scale` take a `scale`
+enum - percent, unit, signed unit, or auto from zero - rather than bounds. An
+axis the model could set is one it could stretch until a two-point difference
+fills the frame, which is an invented baseline by other means. `trend` starts
+at zero and spaces its points evenly, since spacing them by x would claim a
+functional form the digest never gave.
+
+**The new risk is the label-only templates.** `flow`, `cycle` and `versus`
+draw no numbers, so the digest check has nothing to hold. Their failure is
+D37's `note` failure at the size of a whole slide: a true phrase on the wrong
+box. The defence is prompt-side only (`script/v10`: every box names a step the
+narration says, in its order) and should be watched on the first episodes.
+
+**The Linux check, finally.** D37 never ran on Linux. `ci.yml` now installs
+cairo, pango and the `manim` extra, and `tests/test_templates.py` renders every
+template there at 320x180. It skips without manim on a laptop but fails under
+`TABLOID_REQUIRE_MANIM=1`, which CI sets - so a runner missing a library turns
+the build red instead of quietly shipping every callout as a still.
+
+**Cost:** no new API calls. `script/v10` is ~60 lines longer than v9, about
+1,700 more input tokens per segment call - roughly $0.02 an episode. Render is
+~3s of CPU per animated scene, as before; the aim is 12-15 animated scenes an
+episode against 5-6.
+
+**First live run** (2026-11-26, 09-18's papers re-scripted as
+`runs/2026-09-18-d46`, $0.65): animated scenes went from 6 to 12 of 38, across
+six templates; bullet slides from 4 to 0; nothing fell back to a still. The
+check dropped four charts. Three were right - 4.44, 2.88, 33.3, 30.7 and 57
+appear nowhere in the digests. One was the check's fault: "2,518" did not match
+2518, and fixing that found that `:g` formats a million as `1e+06`, so no value
+over a million could ever have matched. Both fixed.
+
+The numbers held; the meanings did not, three times in twelve. A `two_bar` of
+TerminalBench against SWE-bench (two benchmarks drawn as rivals); a `two_bar`
+whose second bar the narration never mentions; a `flow` with arrows through a
+list of benefits that has no order. Every value was real, which is the point:
+this is the semantic exposure D37 predicted, and it is larger than the numeric
+one. `script/v10` was tightened on all three, plus overuse of `waffle` (four,
+three of them over sixty percent) and a `stat_row` of 2 and 3. The tightened
+prompt has not been run.
+
+Not this decision's to fix, but found here: one narration line states "four
+point four four stars", a number the digest does not contain. The comparison
+check caught it on the chart; nothing checks it in the narration.
+
 ---
 
 ## Deferred — not yet decided

@@ -89,7 +89,7 @@ Two workflows, split by whether they can spend money:
 
 | Workflow | Trigger | Secrets | What it does |
 |---|---|---|---|
-| `ci.yml` | every push + PR | **none** | ruff, 249 tests, and the Linux render check |
+| `ci.yml` | every push + PR | **none** | ruff, 410 tests, and the Linux render check (manim included) |
 | `episode.yml` | Tue/Thu 13:00 UTC, or manual | API keys | one full episode, uploaded as an artifact |
 
 **The schedule is off.** Each run spends ~$1.73, so it does nothing until you opt
@@ -225,7 +225,7 @@ invocations**: resuming with `--from` does not grant a fresh budget.
 ## Tests
 
 ```bash
-pytest        # 249 tests, no network, no API spend; ffmpeg optional
+pytest        # 410 tests, no network, no API spend; ffmpeg and manim optional
 ruff check .
 ```
 
@@ -321,12 +321,14 @@ the standalone segment, which has to be publishable on its own (D26).
   `render/slides.py`. The ground is since lifted slightly off black, and a sixth
   palette role — `BASE`, for the value a comparison is measured against — was
   added but is not yet drawn by any static slide type (D36).
-- **Animated callouts have never rendered on Linux.** They work on macOS and
-  ship in the 2026-08-19 episode, but manim draws through cairo and pango and the
-  scheduled workflow has never run with the `manim` extra installed. If those
-  libraries are missing on the runner, every callout falls back to a static slide
-  — correctly and silently, which is the failure mode to watch for rather than a
-  crash (D37). The same caveat as the render path itself.
+- **Animated callouts are tested on Linux, but have not shipped from it.** CI
+  installs cairo, pango and manim and renders all twenty-one templates
+  (`tests/test_templates.py`, failing rather than skipping there). No
+  scheduled episode has yet run on the runner, and Arial is absent on Linux, so
+  pango substitutes a fallback face for the callouts' type (D37, D46).
+- **Three templates draw labels and no numbers.** `flow`, `cycle` and `versus`
+  have nothing for the digest check to verify; a true phrase on the wrong box
+  reads as a claim about that box. The prompt rule is the whole defence (D46).
 - **A `note` can describe a different ratio than its bars draw.** `two_bar`
   renders `note` under a brace spanning the gap between the two bars, so a true
   fact about some *other* ratio reads as a claim about the one on screen. It

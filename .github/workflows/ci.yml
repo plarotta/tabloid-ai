@@ -32,11 +32,16 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          # manim draws text through pango and shapes through cairo. The
+          # scheduled episode installs the same three; testing without them
+          # would leave every animated callout unproven on Linux (D37, D46).
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2-dev libpango1.0-dev pkg-config
 
       - uses: astral-sh/setup-uv@v5
 
       - name: Install
-        run: uv pip install --system -e '.[anthropic]' pytest pytest-cov ruff respx
+        run: uv pip install --system -e '.[anthropic,manim]' pytest pytest-cov ruff respx
 
       - name: Lint
         run: |
@@ -50,6 +55,12 @@ jobs:
         run: |
           ffmpeg -version | head -1
           test -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+          python -c "import manim, manimpango; print('manim', manim.__version__)"
 
+      # tests/test_templates.py renders every comparison template through
+      # manim. It skips when manim is missing on a laptop; here a missing manim
+      # is a broken runner, so it fails instead.
       - name: Test
+        env:
+          TABLOID_REQUIRE_MANIM: "1"
         run: pytest -q
