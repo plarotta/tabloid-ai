@@ -917,6 +917,9 @@ def test_a_valid_comparison_still_arrives(ctx, monkeypatch):
 	seed_extract(ctx, [PaperDigest.model_validate(digest)])
 
 	scenes = [scene(), scene("s2")]
+	# Both values spoken: a two_bar whose baseline is never said becomes a
+	# count_up (D49), which is not what this test is about.
+	scenes[1]["narration"] = "Two hundred tokens per parameter, against twenty."
 	scenes[1]["visual"]["type"] = "result_callout"
 	scenes[1]["visual"]["comparison"] = {
 		"template": "two_bar",

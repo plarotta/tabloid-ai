@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from ..llm import LLMError, MeteredClient, ProviderUnavailable, parse_json_response
-from ..numbers import Digest, unbacked
+from ..numbers import Digest, close, spoken_numbers, unbacked
 from ..paths import read_json, write_json
 from ..prompts import load_prompt
 from ..schemas import (
@@ -414,9 +414,45 @@ class ScriptStage(Stage):
 		manifest = self._check_comparisons(self._clean_manifest(manifest, paper), digest_text)
 		# After the budget pass, not before: condensing rewrites narration, and a
 		# number checked in a sentence that was then rewritten was not checked.
-		return self._check_numbers(
-			self._enforce_budget(manifest, target_words, client), digest_text
-		)
+		manifest = self._enforce_budget(manifest, target_words, client)
+		return self._check_numbers(self._fit_templates(manifest), digest_text)
+
+	def _fit_templates(self, manifest: SceneManifest) -> SceneManifest:
+		"""Two prompt rules the model broke on the first tightened run, enforced.
+
+		Each swaps to the template the rule asked for rather than dropping the
+		chart, since the values are already checked and the shape is what was
+		wrong (D49):
+
+		- a `waffle` of a share over 25% becomes a `split`; a hundred squares
+			three quarters lit is a bar drawn slowly.
+		- a `two_bar` whose second value the narration never says becomes a
+			`count_up` of the first: a baseline the viewer sees but never hears
+			is a claim the scene does not make.
+		"""
+		for scene in manifest.scenes:
+			c = scene.visual.comparison
+			if c is None:
+				continue
+			if c.template == "waffle" and c.value_a is not None and c.value_a > 25:
+				scene.visual.comparison = c.model_copy(update={"template": "split"})
+				log.info(
+					"%s/%s: waffle of %g%% drawn as a split", manifest.arxiv_id, scene.id, c.value_a
+				)
+			elif c.template == "two_bar" and c.value_b is not None:
+				spoken = spoken_numbers(scene.narration)
+				if not any(close(x, c.value_b) or close(c.value_b, x) for x in spoken):
+					scene.visual.comparison = c.model_copy(
+						update={"template": "count_up", "label_b": "", "value_b": None, "note": ""}
+					)
+					log.info(
+						"%s/%s: two_bar baseline %g is never spoken; counting up %g instead",
+						manifest.arxiv_id,
+						scene.id,
+						c.value_b,
+						c.value_a,
+					)
+		return manifest
 
 	def _check_numbers(self, manifest: SceneManifest, digest_text: str) -> SceneManifest:
 		"""Flag every number a scene says or shows that the digest does not back.

@@ -139,3 +139,59 @@ def test_a_correct_derived_note_survives(ctx):
 	out = ScriptStage(ctx)._check_numbers(m, DIGEST.text)
 	assert out.scenes[0].visual.comparison.note == "a 28-point gap"
 	assert out.scenes[0].unverified_numbers == []
+
+
+def test_a_large_share_waffle_is_drawn_as_a_split(ctx):
+	from pipeline.stages.script import ScriptStage
+
+	m = _manifest(
+		"Agents fail to recover in sixty-nine point five percent of runs.",
+		{
+			"type": "result_callout",
+			"highlight": "69.5%",
+			"comparison": {"template": "waffle", "label_a": "fail to recover", "value_a": 69.5},
+		},
+	)
+	out = ScriptStage(ctx)._fit_templates(m)
+	assert out.scenes[0].visual.comparison.template == "split"
+
+
+def test_a_two_bar_with_an_unspoken_baseline_counts_up_instead(ctx):
+	from pipeline.stages.script import ScriptStage
+
+	m = _manifest(
+		"Scout raises task success to ninety point two percent.",
+		{
+			"type": "result_callout",
+			"highlight": "90.2%",
+			"comparison": {
+				"template": "two_bar",
+				"label_a": "Scout",
+				"value_a": 90.2,
+				"label_b": "Single sample",
+				"value_b": 81.8,
+			},
+		},
+	)
+	c = ScriptStage(ctx)._fit_templates(m).scenes[0].visual.comparison
+	assert c.template == "count_up" and c.value_b is None and c.value_a == 90.2
+
+
+def test_a_two_bar_with_a_rounded_spoken_baseline_is_kept(ctx):
+	from pipeline.stages.script import ScriptStage
+
+	m = _manifest(
+		"Eighty percent without search, ninety-eight percent with it.",
+		{
+			"type": "result_callout",
+			"highlight": "98%",
+			"comparison": {
+				"template": "two_bar",
+				"label_a": "With search",
+				"value_a": 97.9,
+				"label_b": "Without search",
+				"value_b": 79.9,
+			},
+		},
+	)
+	assert ScriptStage(ctx)._fit_templates(m).scenes[0].visual.comparison.template == "two_bar"

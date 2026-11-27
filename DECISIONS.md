@@ -2115,6 +2115,14 @@ It runs after the budget pass, because condensing rewrites narration.
 real case - and no false alarms. Two were found and fixed on the way:
 "twenty-five hundred" for 2,518 and "four billion" for "4B".
 
+**Two prompt rules moved into code.** The first run of the tightened
+`script/v10` (09-18 again, $0.23) used ten templates where the D46 run used six,
+and broke two of its own rules: a `waffle` of 69.5% (the prompt says under 25%)
+and a `two_bar` of 90.2 against an 81.8 the narration never says. Neither is
+dropped. A large `waffle` is drawn as a `split`, and a `two_bar` whose baseline
+is not spoken becomes a `count_up` of the paper's value - the shape was wrong,
+not the numbers. Replayed on that run, they change exactly those two scenes.
+
 **Known looseness.** Derivation tries every pair of digest values, so a digest
 with many numbers will back some invented ones by coincidence. The check is
 built to miss rather than to cry wolf; it is a review aid, not a gate.

@@ -141,7 +141,7 @@ def _sig(v: float) -> int:
 	return len(str(int(abs(v))).rstrip("0")) or 1
 
 
-def _close(x: float, claim: float) -> bool:
+def close(x: float, claim: float) -> bool:
 	"""Whether `x`, written at `claim`'s precision, is `claim`.
 
 	Precision is decimal places for a decimal claim, and significant figures -
@@ -164,7 +164,7 @@ class Digest:
 		self.values = sorted(set(digit_numbers(self.text)) | set(spoken_numbers(self.text)))
 
 	def states(self, v: float) -> bool:
-		return any(_close(x, abs(v)) for x in self.values)
+		return any(close(x, abs(v)) for x in self.values)
 
 	def derives(self, v: float) -> bool:
 		"""A difference, sum or ratio of two stated values, at the claim's precision."""
@@ -173,7 +173,7 @@ class Digest:
 			cands = [abs(a - b), a + b]
 			if a and b:
 				cands += [a / b, b / a]
-			if any(_close(c, v) for c in cands):
+			if any(close(c, v) for c in cands):
 				return True
 		return False
 
