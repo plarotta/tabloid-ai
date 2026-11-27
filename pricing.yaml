@@ -45,3 +45,15 @@ audio:
     eleven_multilingual_v2: {input: 100.00}
     eleven_flash_v2_5: {input: 100.00}
     eleven_v3: {input: 100.00}
+
+# units: USD per generated image, at the size and quality the pipeline requests.
+# Images are billed per picture rather than per token, so this table is keyed
+# that way - see Pricing.price.
+#
+# NOTE: like the audio table, these have NOT been verified against a live
+# pricing page. gpt-image-1 is billed per output token in the official docs and
+# the per-image figure below is the commonly quoted equivalent for a medium
+# quality 1536x1024 render. Verify before trusting an image cost figure.
+image:
+  openai:
+    gpt-image-1: {per_image: 0.063}

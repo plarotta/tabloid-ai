@@ -55,12 +55,16 @@ _SEGMENT_SHAPE = (
 	"number still lands that number."
 )
 _COLD_OPEN_SHAPE = (
-	"Two scenes: first a concrete tension supported by the papers, then a brief "
-	"promise of what the episode explains. Do not repeat the first paper's opening "
-	"finding or add a spoken series introduction."
+	"Three scenes: the thesis these papers jointly support, the most striking "
+	"number in the episode, then one line handing into them that names the "
+	"series. The thesis stays in the first scene - it is the reason to keep "
+	"watching, and shortening the open must not cost it."
 )
 
 YOUTUBE_TITLE_MAX = 70
+# The channel, named in D30. Stage 9 prefixes every YouTube title with it and an
+# episode number; the cold open says it aloud and the opening card carries it.
+SERIES_NAME = "ML Papers of the Day"
 
 
 # A value the model put in a comparison, matched against the digest it came
@@ -80,8 +84,50 @@ def _detach_comparisons(payload: object) -> dict[str, object]:
 	return held
 
 
+_NUMBER_WORDS = [
+	"zero",
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine",
+	"ten",
+	"eleven",
+	"twelve",
+	"thirteen",
+	"fourteen",
+	"fifteen",
+	"sixteen",
+	"seventeen",
+	"eighteen",
+	"nineteen",
+	"twenty",
+]
+
+
 def _states(value: float, text: str) -> bool:
-	return re.search(rf"(?<!\d){re.escape(f'{value:g}')}(?!\d)", text) is not None
+	"""Whether `text` states `value`, as digits or - for a small whole number - a word.
+
+	Matched on magnitude: a digest writes a negative cosine with a typographic
+	minus as often as a hyphen, and the sign is drawn from the value either way.
+	The word form exists for `fraction`, whose "nine of ten models" is how a
+	digest says it far more often than "9 of 10" (D46).
+	"""
+	v = abs(value)
+	# "2,518" states 2518. Only a comma between a digit and exactly three more
+	# is a separator; "3,4" in a list of section numbers is left alone.
+	text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+	# Not `:g`, which writes 1234567 as "1.23457e+06" and so could never match.
+	if re.search(rf"(?<!\d){re.escape(format(v, '.15g'))}(?!\d)", text):
+		return True
+	# Not zero or one: "one" is in every digest, so it would back any claim of 1.
+	if v == int(v) and 2 <= v < len(_NUMBER_WORDS):
+		return re.search(rf"\b{_NUMBER_WORDS[int(v)]}\b", text, re.IGNORECASE) is not None
+	return False
 
 
 def _detach_direction(payload: dict) -> dict[str, dict]:
@@ -247,11 +293,17 @@ class ScriptStage(Stage):
 			c = scene.visual.comparison
 			if c is None:
 				continue
-			missing = [
-				f"{v:g}"
-				for v in (c.value_a, c.value_b)
-				if v is not None and not _states(v, digest_text)
-			]
+			missing = [f"{v:g}" for v in c.values() if not _states(v, digest_text)]
+			# A curve needs somewhere to fall to and a distance to fall over;
+			# without either it is a line, and a line is not the claim.
+			if not missing and c.template == "decay_curve" and (c.value_b is None or not c.steps):
+				log.warning(
+					"%s/%s: decay_curve needs value_b and steps; rendering it as a static callout",
+					manifest.arxiv_id,
+					scene.id,
+				)
+				scene.visual.comparison = None
+				continue
 			if missing:
 				log.warning(
 					"%s/%s: comparison claims %s, which the digest does not contain; "
@@ -607,11 +659,9 @@ class ScriptStage(Stage):
 				f"verified_digest:\n{digest_to_prompt_text(d)}{edges}"
 			)
 
-		# One scene to name the series and the thread, then one tease per paper.
-		# The teases get the bulk of the budget; the framing scene takes what is
-		# left, which is the ordering the cold open reads in.
+		# Three scenes since v8: thesis, the episode's most striking number, then
+		# the hand-off that names the series (owner review of Ep. 5).
 		cold_words = int(cfg.cold_open_seconds / 60 * cfg.words_per_minute)
-		tease_words = round(cold_words * 0.7 / max(len(digests), 1))
 		trans_words = int(cfg.transition_seconds / 60 * cfg.words_per_minute)
 		outro_words = int(cfg.outro_seconds / 60 * cfg.words_per_minute)
 		system, user = prompt.render(
@@ -619,9 +669,6 @@ class ScriptStage(Stage):
 			papers="\n".join(blocks),
 			cold_open_seconds=cfg.cold_open_seconds,
 			cold_open_words=cold_words,
-			cold_open_scenes=2,
-			framing_words=cold_words - tease_words * len(digests),
-			tease_words=tease_words,
 			transition_seconds=cfg.transition_seconds,
 			transition_words=trans_words,
 			# A ceiling rather than a target: "about twelve words" read as a
@@ -629,6 +676,9 @@ class ScriptStage(Stage):
 			transition_words_max=round(trans_words * 1.25),
 			outro_seconds=cfg.outro_seconds,
 			outro_words=outro_words,
+			# The model writes only what follows the prefix Stage 9 adds.
+			title_prefix=f"{SERIES_NAME} Ep. N: ",
+			title_max=YOUTUBE_TITLE_MAX - len(f"{SERIES_NAME} Ep. 99: "),
 			wpm=cfg.words_per_minute,
 		)
 		try:
@@ -697,9 +747,10 @@ class ScriptStage(Stage):
 		"""Measure the wrapper against its budget, in words, at the stage that
 		writes it.
 
-		Nothing is cut. The cold open cannot lose a scene without losing a paper's
-		tease, and a bridge is one sentence that is either there or not - so unlike
-		a segment, there is no trim here that keeps the shape. What there is to fix
+		Nothing is cut. The cold open's three scenes each do a different job - the
+		thesis, the number, the hand-off - and a bridge is one sentence that is
+		either there or not, so unlike a segment there is no trim here that keeps
+		the shape. What there is to fix
 		is the prompt, and what was missing was knowing before the render that it
 		needed fixing: the 2026-08-13 wrapper ran 66s against a 46s budget and that
 		only became visible as a 5:16 episode two stages later (D34).

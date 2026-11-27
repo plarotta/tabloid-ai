@@ -112,10 +112,13 @@ class ArxivClient:
 		delay_seconds: float = 3.0,
 		max_retries: int = 5,
 		client: httpx.Client | None = None,
+		rate_limit_backoff_seconds: float = 30.0,
 	) -> None:
 		self.page_size = page_size
 		self.delay_seconds = delay_seconds
 		self.max_retries = max_retries
+		# The first wait after a 429, doubling from there. See `_backoff`.
+		self.rate_limit_backoff_seconds = rate_limit_backoff_seconds
 		self._client = client or httpx.Client(
 			timeout=60.0, headers={"User-Agent": USER_AGENT}, follow_redirects=True
 		)
@@ -141,10 +144,40 @@ class ArxivClient:
 				return papers, total
 			except Exception as e:
 				last = e
-				wait = self.delay_seconds * (attempt + 1)
+				if attempt == self.max_retries - 1:
+					break  # nothing left to retry; sleeping only delays the error
+				wait = self._backoff(e, attempt)
 				log.warning("arXiv page %s failed (%s); retrying in %.1fs", start, e, wait)
 				time.sleep(wait)
 		raise RuntimeError(f"arXiv request failed after {self.max_retries} attempts: {last}")
+
+	def _backoff(self, exc: Exception, attempt: int) -> float:
+		"""How long to wait before retrying, by what went wrong.
+
+		A flaky connection clears in seconds and a linear back-off is right for
+		it. **Being rate limited is a different animal**: arXiv has already
+		decided to refuse us, and asking again forty-five seconds later just
+		spends the retry budget confirming it. Measured the hard way - four window
+		probes in one afternoon earned a 429, and a full run then failed at Stage 1
+		having exhausted all five attempts inside a minute (D40).
+
+		`Retry-After` is honoured when the server sends one, since that is the
+		server telling us the answer rather than us guessing it.
+		"""
+		linear = self.delay_seconds * (attempt + 1)
+		resp = getattr(exc, "response", None)
+		if resp is None or getattr(resp, "status_code", None) not in (429, 503):
+			return linear
+
+		retry_after = (getattr(resp, "headers", None) or {}).get("Retry-After")
+		if retry_after:
+			try:
+				return max(float(retry_after), linear)
+			except (TypeError, ValueError):
+				pass
+		# 30s, 60s, 120s, 240s: minutes, because that is the unit a rate limit
+		# resets in. Capped so a run cannot hang for the better part of an hour.
+		return min(self.rate_limit_backoff_seconds * (2**attempt), 300.0)
 
 	def search(
 		self, categories: list[str], start: datetime, end: datetime, max_papers: int = 3000

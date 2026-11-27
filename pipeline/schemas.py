@@ -8,6 +8,7 @@ they communicate only through `runs/<date>/<stage>/`. That is what makes
 
 from __future__ import annotations
 
+import itertools
 from datetime import datetime
 from typing import Literal
 
@@ -221,31 +222,130 @@ VisualType = Literal[
 StoryBeat = Literal["hook", "context", "mechanism", "evidence", "caveat", "payoff"]
 
 
+Template = Literal[
+	# One or two values (D37, D42)
+	"two_bar",
+	"count_up",
+	"split",
+	"decay_curve",
+	# One or two values on a scale (D46)
+	"delta",
+	"gap",
+	"range",
+	"multiplier",
+	"fraction",
+	"waffle",
+	# Several values (D46)
+	"ranking",
+	"funnel",
+	"trend",
+	"stat_row",
+	"scale",
+	"stack",
+	"slope",
+	"threshold",
+	# Labels only, no numbers (D46)
+	"flow",
+	"cycle",
+	"versus",
+]
+
+# The templates that draw words and no numbers. Nothing in them can be checked
+# against the digest, which is exactly their risk: a true label describing the
+# wrong thing (D37's `note` failure, at the size of a whole slide).
+LABEL_ONLY_TEMPLATES = frozenset({"flow", "cycle", "versus"})
+
+# What a template needs, by field. Checked in `Comparison.check_template` so a
+# malformed comparison is dropped on its own scene (D37) rather than handed to
+# manim to fail on.
+_ITEM_COUNTS: dict[str, tuple[int, int]] = {
+	"ranking": (3, 6),
+	"funnel": (3, 5),
+	"trend": (3, 6),
+	"stat_row": (2, 4),
+	"scale": (1, 3),
+	"stack": (2, 5),
+	"slope": (2, 4),
+	"threshold": (1, 5),
+	"flow": (3, 5),
+	"cycle": (3, 5),
+}
+
+# `versus` draws one of these between its two terms. ASCII on the way in, since
+# that is what a model reliably types inside JSON; the glyph is the renderer's.
+Relation = Literal["!=", "vs", "->", ">", "<", "~", "-", "+"]
+
+# The axis a value sits on. An enum rather than free bounds on purpose: an axis
+# the model could set is an axis the model could stretch until a two-point gap
+# fills the frame, and that is the same lie as an invented baseline.
+ScaleKind = Literal["auto", "percent", "unit", "signed_unit"]
+SCALE_BOUNDS: dict[str, tuple[float, float]] = {
+	"percent": (0.0, 100.0),
+	"unit": (0.0, 1.0),
+	"signed_unit": (-1.0, 1.0),
+}
+
+
+class ComparisonItem(StrictModel):
+	"""One row, bar, point or box in a multi-value template."""
+
+	label: str
+	value: float | None = None
+	# `slope` only: the item's value under the second condition.
+	value_b: float | None = None
+
+	@field_validator("label", mode="before")
+	@classmethod
+	def stringify(cls, v: object) -> object:
+		if v is None:
+			return ""
+		return f"{v:g}" if isinstance(v, int | float) and not isinstance(v, bool) else v
+
+
 class Comparison(StrictModel):
 	"""Parameters for an animated callout, chosen from a fixed set of templates.
 
 	The model fills these in; it never writes animation code. That is the whole
 	design: manim scenes that compile, read well and match the narration are hard
-	to generate and impossible to validate by eye at scale, whereas four numbers
-	and two labels can be checked in full (D36).
+	to generate and impossible to validate by eye at scale, whereas a handful of
+	numbers and labels can be checked in full (D36, D37).
+
+	The template set grew from four to twenty-one in D46, each new one fitted to a
+	claim shape that recurred across twelve episodes' static callouts. The field
+	set grew by much less: most templates reuse `value_a`/`value_b`, and the
+	multi-value ones share `items`.
 
 	Optional everywhere it appears. Absent - or invalid, or unrenderable - and the
 	scene stays the static callout it is today.
 	"""
 
-	template: Literal["two_bar", "count_up", "split"]
+	template: Template
 	# The paper's own value; the one the accent colour is spent on.
-	label_a: str
-	value_a: float = Field(allow_inf_nan=False)
+	label_a: str = ""
+	value_a: float | None = Field(default=None, allow_inf_nan=False)
 	unit: str = ""
-	# The value being compared against. `two_bar` requires it; the others ignore
-	# it. This is what BASE exists for (D36).
+	# The value being compared against. This is what BASE exists for (D36).
 	label_b: str = ""
 	value_b: float | None = Field(default=None, allow_inf_nan=False)
 	# A short line under the figure - "10x tokens per parameter". Never a sentence.
 	note: str = ""
+	# `decay_curve` only: how many steps the fall is drawn across. Checked against
+	# the digest like every other value, because the x-axis is a claim too (D42).
+	steps: float | None = None
+	# Multi-value templates. The first item is the paper's and wears the accent.
+	items: list[ComparisonItem] = Field(default_factory=list)
+	# `threshold`, and optionally `range`: a reference line the values sit against.
+	threshold: float | None = None
+	threshold_label: str = ""
+	# `gap`, `range`, `scale`: the axis. See ScaleKind.
+	scale: ScaleKind = "auto"
+	# `versus` only.
+	relation: Relation = "vs"
+	label_c: str = ""
 
-	@field_validator("label_a", "label_b", "unit", "note", mode="before")
+	@field_validator(
+		"label_a", "label_b", "label_c", "unit", "note", "threshold_label", mode="before"
+	)
 	@classmethod
 	def stringify(cls, v: object) -> object:
 		"""Accept a number, or a null, where a label was asked for.
@@ -253,7 +353,7 @@ class Comparison(StrictModel):
 		Both observed live on the first two runs of prompt v6: `note: 65` and
 		`unit: null`, each costing an animation to a type error. The value is going
 		onto a slide as text either way and an absent label simply does not draw,
-		so refusing either buys nothing. `label_a` becoming empty is caught by
+		so refusing either buys nothing. A label a template needs is caught by
 		`check_template` where it actually matters.
 		"""
 		if v is None:
@@ -264,29 +364,125 @@ class Comparison(StrictModel):
 
 	@model_validator(mode="after")
 	def check_template(self) -> Comparison:
-		if self.value_a <= 0:
-			raise ValueError("value_a must be positive; a bar cannot have zero length")
-		if self.template == "two_bar":
-			if self.value_b is None or self.value_b <= 0:
-				raise ValueError("two_bar needs a positive value_b to compare against")
-			if not self.label_b:
-				raise ValueError("two_bar needs label_b to say what value_b is")
-			ratio = max(self.value_a, self.value_b) / min(self.value_a, self.value_b)
-			if ratio > 500:
-				raise ValueError(
-					f"two_bar values differ by {ratio:.0f}x; the smaller bar would be "
-					"invisible. Use count_up and put the ratio in `note`."
-				)
-		if self.template == "split" and not 0 < self.value_a < 100:
-			raise ValueError("split expects value_a as a percentage between 0 and 100")
+		t = self.template
+		need = _requirements(self)
+		if need:
+			raise ValueError(f"{t} {need}")
 		return self
 
+	def values(self) -> list[float]:
+		"""Every number this comparison draws, for checking against the digest."""
+		out = [v for v in (self.value_a, self.value_b, self.steps, self.threshold) if v is not None]
+		for it in self.items:
+			out += [v for v in (it.value, it.value_b) if v is not None]
+		return out
+
 	def numbers(self) -> str:
-		"""The claimed values, for checking against the digest they came from."""
-		parts = [f"{self.value_a:g}"]
-		if self.value_b is not None:
-			parts.append(f"{self.value_b:g}")
-		return ", ".join(parts)
+		"""The claimed values, for logs and for the digest check's message."""
+		return ", ".join(f"{v:g}" for v in self.values())
+
+
+def _ratio_ok(values: list[float], limit: float = 100.0) -> bool:
+	"""Whether the smallest of `values` would still be visible beside the largest."""
+	pos = [abs(v) for v in values if v]
+	return not pos or max(pos) / min(pos) <= limit
+
+
+def _requirements(c: Comparison) -> str:
+	"""What `c` is missing for its template, as the end of a sentence, or ''."""
+	t, a, b, items = c.template, c.value_a, c.value_b, c.items
+	vals = [it.value for it in items]
+
+	lo_n, hi_n = _ITEM_COUNTS.get(t, (0, 0))
+	if hi_n and not lo_n <= len(items) <= hi_n:
+		return f"needs {lo_n}-{hi_n} items, got {len(items)}"
+	if t not in _ITEM_COUNTS and items:
+		return "takes no items; use value_a/value_b"
+	if t in _ITEM_COUNTS and any(not it.label for it in items):
+		return "needs a label on every item"
+
+	if t in LABEL_ONLY_TEMPLATES:
+		if any(v is not None for v in vals) or a is not None or b is not None:
+			return "draws labels only; put numbers in a numeric template"
+		if any(len(it.label) > 40 for it in items):
+			return "labels must be short (40 characters at most)"
+		if t == "versus" and not (c.label_a and c.label_b):
+			return "needs label_a and label_b"
+		return ""
+
+	if t in _ITEM_COUNTS:
+		if any(v is None for v in vals):
+			return "needs a value on every item"
+		if t == "slope" and any(it.value_b is None for it in items):
+			return "needs value_b on every item"
+		if t == "slope" and not (c.label_a and c.label_b):
+			return "needs label_a and label_b to name the two conditions"
+		if t in ("ranking", "funnel", "stat_row", "stack") and any(v <= 0 for v in vals):
+			return "needs positive values"
+		if t in ("ranking", "funnel", "threshold") and not _ratio_ok([*vals, c.threshold or 0]):
+			return "values differ by more than 100x; the smallest bar would be invisible"
+		if t == "funnel" and any(x < y for x, y in itertools.pairwise(vals)):
+			return "needs values that only narrow, stage to stage"
+		if t == "stack" and sum(vals) > 100.5:
+			return f"segments sum to {sum(vals):g}, past 100 percent"
+		if t == "threshold" and c.threshold is None:
+			return "needs threshold"
+		if t == "trend" and any(v < 0 for v in vals):
+			return "needs values of zero or more"
+		if t == "scale":
+			return _on_scale(c, vals)
+		return ""
+
+	# One or two values.
+	if a is None:
+		return "needs value_a"
+	if t in ("two_bar", "count_up", "decay_curve", "multiplier", "waffle") and a <= 0:
+		return "needs a positive value_a; a bar cannot have zero length"
+	if t == "two_bar":
+		if b is None or b <= 0:
+			return "needs a positive value_b to compare against"
+		if not c.label_b:
+			return "needs label_b to say what value_b is"
+		ratio = max(a, b) / min(a, b)
+		if ratio > 500:
+			return (
+				f"values differ by {ratio:.0f}x; the smaller bar would be "
+				"invisible. Use count_up and put the ratio in `note`."
+			)
+	if t == "split" and not 0 < a < 100:
+		return "expects value_a as a percentage between 0 and 100"
+	if t in ("delta", "gap", "range"):
+		if b is None:
+			return "needs value_b"
+		if a == b:
+			return "needs two different values"
+		if t == "range" and a > b:
+			return "needs value_a as the low end and value_b as the high end"
+		if t in ("gap", "range"):
+			return _on_scale(c, [a, b, c.threshold] if c.threshold is not None else [a, b])
+		if min(a, b) < 0:
+			return "needs values of zero or more"
+	if t == "multiplier" and not 1.5 <= a <= 100:
+		return "draws 1.5x to 100x; past that the blocks are too small to count"
+	if t == "multiplier" and not c.label_b:
+		return "needs label_b to name the single unit"
+	if t == "fraction":
+		if b is None or a != int(a) or b != int(b):
+			return "needs whole numbers: value_a of value_b"
+		if not 0 <= a <= b <= 100 or b < 2:
+			return "needs 0 <= value_a <= value_b <= 100"
+	if t == "waffle" and not 0 < a <= 100:
+		return "expects value_a as a percentage between 0 and 100"
+	return ""
+
+
+def _on_scale(c: Comparison, vals: list[float]) -> str:
+	if c.scale == "auto":
+		return "" if all(v >= 0 for v in vals) else "needs scale signed_unit for negative values"
+	lo, hi = SCALE_BOUNDS[c.scale]
+	if any(not lo <= v <= hi for v in vals):
+		return f"has a value outside the {c.scale} scale ({lo:g} to {hi:g})"
+	return ""
 
 
 class Visual(StrictModel):
@@ -484,6 +680,11 @@ class PackageResult(StrictModel):
 	as the manifest and as the copy-paste source for the YouTube upload form."""
 
 	generated_at: datetime
+	# Which episode of the series this is, stamped on the first packaging and
+	# reused on every later one. Read live from `state.json` it would drift: a
+	# re-render months later would relabel a finished episode with whatever
+	# number the series had reached (D38).
+	episode_number: int | None = None
 	title: str = ""
 	description: str = ""
 	thumbnail_text_options: list[str] = Field(default_factory=list)
@@ -538,7 +739,7 @@ class CallRecord(StrictModel):
 	stage: str
 	provider: str
 	model: str
-	kind: Literal["text", "audio"] = "text"
+	kind: Literal["text", "audio", "image"] = "text"
 	input_units: int
 	output_units: int
 	cost_usd: float

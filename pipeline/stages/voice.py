@@ -87,30 +87,73 @@ class VoiceStage(Stage):
 	def load(self) -> VoiceResult:
 		return VoiceResult.model_validate(read_json(self.paths.stage_dir("voice") / "voice.json"))
 
+	def _scene_settings(self, scene, index: int, total: int) -> dict | None:
+		"""Nudge the voice settings for what this scene is doing.
+
+		D21 named the monotony and its two levers; this is the Stage 7 one. Every
+		clip in Ep. 6 was synthesized with the same four numbers, so a headline
+		number and an honest caveat were read identically across five minutes.
+
+		The moves are small on purpose. `stability` down is more variation in the
+		read, so it goes down where the line should lift - the opening, a number -
+		and up where it should settle, on the caveat the segment turns on. Large
+		swings here do not read as expression, they read as a different person.
+		"""
+		base = self.config.tts.voice_settings
+		if not base or not self.config.tts.vary_by_scene:
+			return None
+
+		def clamp(x: float) -> float:
+			return round(max(0.0, min(1.0, x)), 3)
+
+		stability = base.get("stability", 0.4)
+		style = base.get("style", 0.3)
+		vtype = getattr(scene.visual, "type", "")
+
+		if index == 0 or vtype == "title_card":
+			stability, style = stability - 0.05, style + 0.10
+		elif vtype == "result_callout":
+			stability, style = stability - 0.10, style + 0.15
+		elif total >= 3 and index == total - 2:
+			# The caveat scene, by the script prompt's own structure rule.
+			stability, style = stability + 0.15, style - 0.10
+		else:
+			return dict(base)
+		return {**base, "stability": clamp(stability), "style": clamp(style)}
+
 	def _narrate(
 		self, client, manifest: SceneManifest, label: str, gap: float | None = None
 	) -> SegmentAudio:
 		out_dir = self.paths.stage_dir("voice") / label
 		scenes: list[SceneAudio] = []
 
+		# Context for ElevenLabs' continuity is the spoken lines either side;
+		# the position for per-scene settings counts every scene (D42).
 		spoken = [s for s in manifest.scenes if s.narration.strip()]
-		for i, scene in enumerate(spoken):
+		total = len(manifest.scenes)
+		for index, scene in enumerate(manifest.scenes):
 			text = scene.narration.strip()
 			if not text:
 				log.warning("%s/%s: empty narration; skipping", label, scene.id)
 				continue
+			settings = self._scene_settings(scene, index, total)
 			contextual = getattr(client, "synthesize_with_context", None)
 			if self.config.tts.contextual_delivery and contextual is not None:
+				i = next(k for k, s in enumerate(spoken) if s is scene)
 				result = contextual(
 					text,
 					out_dir / scene.id,
 					voice=self.config.tts.voice or None,
+					settings=settings,
 					previous_text=spoken[i - 1].narration if i else "",
 					next_text=spoken[i + 1].narration if i + 1 < len(spoken) else "",
 				)
 			else:
 				result = client.synthesize(
-					text, out_dir / scene.id, voice=self.config.tts.voice or None
+					text,
+					out_dir / scene.id,
+					voice=self.config.tts.voice or None,
+					settings=settings,
 				)
 			# A beat between scenes. The slide changes here too, so the pause is
 			# a visual rest as much as an audible one. Bridges pass a longer one:
