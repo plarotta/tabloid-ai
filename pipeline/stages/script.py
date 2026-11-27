@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from ..llm import LLMError, MeteredClient, ProviderUnavailable, parse_json_response
+from ..numbers import Digest, unbacked
 from ..paths import read_json, write_json
 from ..prompts import load_prompt
 from ..schemas import (
@@ -230,6 +231,12 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 			"",
 			" · ".join(bits),
 		]
+		if s.unverified_numbers:
+			out += [
+				"",
+				f"⚠ **not in the digest:** {', '.join(s.unverified_numbers)} - "
+				"check against the paper before this ships",
+			]
 		if v.bullets:
 			out += [""] + [f"  - {b}" for b in v.bullets]
 		out.append("")
@@ -403,10 +410,52 @@ class ScriptStage(Stage):
 				"standalone as-is",
 				digest.arxiv_id,
 			)
-		manifest = self._check_comparisons(
-			self._clean_manifest(manifest, paper), digest_to_prompt_text(digest)
+		digest_text = digest_to_prompt_text(digest)
+		manifest = self._check_comparisons(self._clean_manifest(manifest, paper), digest_text)
+		# After the budget pass, not before: condensing rewrites narration, and a
+		# number checked in a sentence that was then rewritten was not checked.
+		return self._check_numbers(
+			self._enforce_budget(manifest, target_words, client), digest_text
 		)
-		return self._enforce_budget(manifest, target_words, client)
+
+	def _check_numbers(self, manifest: SceneManifest, digest_text: str) -> SceneManifest:
+		"""Flag every number a scene says or shows that the digest does not back.
+
+		The charts' values are held to the digest already (D37); this is the rest
+		of what a viewer takes as a figure - narration, highlight, title, bullets
+		and a chart's labels. A chart's `note` is the one thing changed rather
+		than flagged: it is drawn as a claim about the bars, and dropping it
+		costs a caption, not the chart (D49).
+		"""
+		backing = Digest(digest_text)
+		for scene in manifest.scenes:
+			v, c = scene.visual, scene.visual.comparison
+			if c is not None and c.note and unbacked(c.note, backing):
+				log.warning(
+					"%s/%s: chart note %r states %s, which the digest does not back; "
+					"dropping the note",
+					manifest.arxiv_id,
+					scene.id,
+					c.note,
+					", ".join(unbacked(c.note, backing)),
+				)
+				c.note = ""
+			screen = [v.title or "", v.highlight or "", *v.bullets]
+			if c is not None:
+				screen += [c.label_a, c.label_b, c.label_c, c.threshold_label]
+				screen += [i.label for i in c.items]
+			found = unbacked(scene.narration, backing, spoken=True)
+			found += unbacked(" | ".join(x for x in screen if x), backing)
+			scene.unverified_numbers = list(dict.fromkeys(found))
+			if scene.unverified_numbers:
+				log.warning(
+					"%s/%s: states %s, which the digest neither states nor derives; "
+					"flagged for review",
+					manifest.arxiv_id,
+					scene.id,
+					", ".join(scene.unverified_numbers),
+				)
+		return manifest
 
 	def _enforce_budget(
 		self, manifest: SceneManifest, target_words: int, client: MeteredClient | None = None

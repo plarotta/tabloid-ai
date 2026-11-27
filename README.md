@@ -378,6 +378,10 @@ the standalone segment, which has to be publishable on its own (D26).
   (`tests/test_templates.py`, failing rather than skipping there). No
   scheduled episode has yet run on the runner, and Arial is absent on Linux, so
   pango substitutes a fallback face for the callouts' type (D37, D46).
+- **Numbers outside the charts are flagged, not blocked.** Narration and
+  on-screen text are checked against the digest (stated, or arithmetic on what
+  it states). A miss marks the scene ⚠ in `script/segment_*.md` and leaves it in
+  the episode: read those flags before publishing (D49).
 - **Three templates draw labels and no numbers.** `flow`, `cycle` and `versus`
   have nothing for the digest check to verify; a true phrase on the wrong box
   reads as a claim about that box. The prompt rule is the whole defence (D46).

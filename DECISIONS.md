@@ -2081,6 +2081,46 @@ not ask for it.
 
 ---
 
+
+## D49 - Every number a viewer reads or hears, held to the digest
+
+D46's re-run put "four point four four stars" in the narration and "4.44 stars"
+on screen, and neither number was in the digest. The chart check (D37) never
+looked: it holds only the values a chart *draws*. Everything else a viewer takes
+as a figure - narration, highlight, title, bullets, a chart's labels and note -
+went unchecked, and the narration is where most of the numbers are.
+
+**Two readers, because the script writes numbers twice.** The screen shows
+digits; the narration spells them out for the voice. `pipeline/numbers.py`
+reads both: "2,518", "4B", "sixty-nine point five", "eleven thousand six
+hundred twenty-eight", "twenty-five hundred".
+
+**Backed is stated or derived, at the claim's own precision.** A digest says
+57% and 85%; "a twenty-eight point gap" is correct and nowhere in it, so a
+difference, sum or ratio of two stated values backs a claim. Spoken numbers
+round, so 2,518 backs "twenty-five hundred" and 67.9 backs "sixty-eight" - but
+never at fewer than two significant figures, or 85 would back "ninety".
+Decimals and anything from ten up are checked; "three models" and "GPT-four"
+are not, since a check that fires on every small count is one nobody reads.
+
+**Flag, do not rewrite** - with one exception. Speech cannot be repaired by
+deleting a number from it, and a highlight is the scene's point. So a scene
+carries `unverified_numbers`, the run logs it, and the review markdown marks it
+⚠ above the scene. The exception is a chart's `note`: it is drawn as a claim
+about the bars on screen, and dropping it costs a caption, not the chart.
+
+It runs after the budget pass, because condensing rewrites narration.
+
+**Measured on the D46 re-run:** one flag in 38 scenes - 4.44 and 2.88, the
+real case - and no false alarms. Two were found and fixed on the way:
+"twenty-five hundred" for 2,518 and "four billion" for "4B".
+
+**Known looseness.** Derivation tries every pair of digest values, so a digest
+with many numbers will back some invented ones by coincidence. The check is
+built to miss rather than to cry wolf; it is a review aid, not a gate.
+
+---
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit

@@ -509,6 +509,10 @@ class Scene(StrictModel):
 	beat: StoryBeat | None = None
 	# None uses the configured default; zero is a deliberate continuous cut.
 	pause_after: float | None = Field(default=None, ge=0, le=1.2, allow_inf_nan=False)
+	# Numbers this scene says or shows that its digest neither states nor
+	# derives (D49). Flagged for review, never rewritten: speech cannot be fixed
+	# by deleting a figure from it.
+	unverified_numbers: list[str] = Field(default_factory=list)
 
 
 class SceneManifest(StrictModel):
