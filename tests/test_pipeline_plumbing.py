@@ -133,13 +133,37 @@ def state_file(tmp_path, monkeypatch):
 	return path
 
 
-def _packaged(ctx, window_end: str = "2026-08-07T12:00:00+00:00") -> None:
+def _packaged(
+	ctx, window_end: str = "2026-08-07T12:00:00+00:00", papers: tuple[str, ...] = ("2608.00001",)
+) -> None:
 	"""Minimal on-disk evidence of a complete fetch -> package run."""
 	write_json(
 		ctx.paths.fetch_window_json,
 		{"start": "2026-08-03T12:00:00+00:00", "end": window_end},
 	)
 	write_json(ctx.paths.output_dir / "metadata.json", {"generated_at": "2026-08-07T12:00:00Z"})
+	# The ledger is read off the script, so a run without one records no papers.
+	write_json(
+		ctx.paths.stage_dir("script") / "script.json",
+		{
+			"generated_at": "2026-08-07T12:00:00Z",
+			"episode": {"title": "t", "description": "d"},
+			"segments": [
+				{
+					"arxiv_id": pid,
+					"scenes": [
+						{
+							"id": "s1",
+							"narration": "A line.",
+							"visual": {"type": "title_card", "title": "T"},
+							"est_seconds": 5,
+						}
+					],
+				}
+				for pid in papers
+			],
+		},
+	)
 
 
 def test_window_advances_to_the_fetch_end_not_to_now(ctx, state_file):
@@ -149,7 +173,7 @@ def test_window_advances_to_the_fetch_end_not_to_now(ctx, state_file):
 	from pipeline.state import last_successful_run
 
 	_packaged(ctx)
-	advanced = _advance_window(ctx, "fetch", None)
+	advanced = _advance_window(ctx, None)
 	assert advanced == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
 	assert last_successful_run(state_file) == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
 
@@ -180,20 +204,41 @@ def test_recorded_window_end_is_the_newest_paper_not_the_requested_end(ctx, monk
 	assert FetchStage(ctx).window_end() == newest
 
 
-def test_partial_replay_does_not_advance_the_window(ctx, state_file):
-	"""`--from script` reuses a cached fetch; it has covered no new window."""
+def test_a_replayed_episode_still_records_its_window(ctx, state_file):
+	"""What earns the marker is a packaged episode over a real fetch window, not
+	the stage the invocation started from.
+
+	Regression for D38: the 2026-08-19 episode was finished with `--from script`
+	after an API outage, nothing recorded it, and the next window opened at
+	fourteen days and three thousand papers instead of seven and two thousand."""
 	from pipeline.cli import _advance_window
+	from pipeline.state import covered_papers, last_successful_run
 
 	_packaged(ctx)
-	assert _advance_window(ctx, "script", None) is None
-	assert not state_file.exists()
+	assert _advance_window(ctx, None) == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+	assert last_successful_run(state_file) == datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+	assert covered_papers(state_file), "and the papers it used are on the ledger"
+
+
+def test_the_marker_never_moves_backwards(ctx, state_file):
+	"""Re-rendering an old run must not drag the marker back over windows that
+	have since been covered - the papers still join the ledger, which is a set."""
+	from pipeline.cli import _advance_window
+	from pipeline.state import last_successful_run, mark_successful_run
+
+	later = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+	mark_successful_run(later, state_file)
+	_packaged(ctx)  # this run's window ended 2026-08-07
+
+	assert _advance_window(ctx, None) is None
+	assert last_successful_run(state_file) == later
 
 
 def test_single_paper_run_does_not_advance_the_window(ctx, state_file):
 	from pipeline.cli import _advance_window
 
 	_packaged(ctx)
-	assert _advance_window(ctx, "fetch", "2608.05715") is None
+	assert _advance_window(ctx, "2608.05715") is None
 	assert not state_file.exists()
 
 
@@ -203,7 +248,7 @@ def test_run_that_never_packaged_does_not_advance_the_window(ctx, state_file):
 	from pipeline.cli import _advance_window
 
 	write_json(ctx.paths.fetch_window_json, {"end": "2026-08-07T12:00:00+00:00"})
-	assert _advance_window(ctx, "fetch", None) is None
+	assert _advance_window(ctx, None) is None
 	assert not state_file.exists()
 
 

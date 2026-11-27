@@ -288,6 +288,11 @@ class EditorialScene:
 
 	def _result(self) -> None:
 		v, c = self.scene.visual, self.scene.visual.comparison
+		# This engine draws three of the twenty-one templates (D46). The rest -
+		# several values, or labels only - are manim's; here they read as the
+		# static callout rather than as a misdrawn single number (D48).
+		if c is not None and c.template not in ("two_bar", "split", "count_up"):
+			c = None
 		if c is None:
 			if v.title:
 				self._heading(v.title)

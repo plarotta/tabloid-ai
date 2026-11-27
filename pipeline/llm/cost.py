@@ -27,12 +27,17 @@ class BudgetExceeded(RuntimeError):
 
 
 class Pricing:
-	"""Lookup table from pricing.yaml. Units are USD per 1M tokens (text) or
-	per 1M characters (audio)."""
+	"""Lookup table from pricing.yaml.
+
+	Units are USD per 1M tokens (text), per 1M characters (audio), or per image
+	(image). Images are the odd one out because that is how they are actually
+	billed - a flat rate per picture at a given size and quality - and pretending
+	otherwise would put a made-up token count in the ledger."""
 
 	def __init__(self, table: dict) -> None:
 		self._text = table.get("text", {}) or {}
 		self._audio = table.get("audio", {}) or {}
+		self._image = table.get("image", {}) or {}
 		self.verified_on = table.get("verified_on")
 
 	@classmethod
@@ -43,7 +48,9 @@ class Pricing:
 		return cls(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
 
 	def rate(self, kind: str, provider: str, model: str) -> dict[str, float] | None:
-		table = self._text if kind == "text" else self._audio
+		table = {"text": self._text, "audio": self._audio, "image": self._image}.get(
+			kind, self._text
+		)
 		return (table.get(provider) or {}).get(model)
 
 	def price(
@@ -53,6 +60,9 @@ class Pricing:
 		rate = self.rate(kind, provider, model)
 		if rate is None:
 			return 0.0, True
+		if kind == "image":
+			# `input_units` is a count of pictures, not of tokens.
+			return input_units * float(rate.get("per_image", 0.0)), False
 		cost = (input_units / 1_000_000) * float(rate.get("input", 0.0))
 		cost += (output_units / 1_000_000) * float(rate.get("output", 0.0))
 		return cost, False

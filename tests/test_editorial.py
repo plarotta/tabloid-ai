@@ -181,7 +181,7 @@ def test_scene_pauses_allow_zero_and_bridge_override(ctx, monkeypatch):
 	monkeypatch.setattr("pipeline.stages.voice.shutil.which", lambda name: "/bin/ffmpeg")
 
 	class Client:
-		def synthesize(self, text, path, voice=None):
+		def synthesize(self, text, path, voice=None, settings=None):
 			path.parent.mkdir(parents=True, exist_ok=True)
 			path.write_bytes(b"test")
 			return SpeechResult(path, 2, len(text), "fixture", "fixture")

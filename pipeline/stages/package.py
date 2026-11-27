@@ -28,6 +28,32 @@ from ..paths import read_json, write_json
 from ..render.slides import SlideContext, thumbnail
 from ..schemas import PackageResult
 from ..stage import Stage, StageError
+from .script import SERIES_NAME, YOUTUBE_TITLE_MAX
+
+# Words that cannot end a trimmed title without sounding like a dropped call.
+_DANGLING = {
+	"a",
+	"an",
+	"and",
+	"as",
+	"at",
+	"by",
+	"for",
+	"from",
+	"in",
+	"into",
+	"its",
+	"of",
+	"on",
+	"or",
+	"the",
+	"their",
+	"these",
+	"this",
+	"to",
+	"with",
+	"without",
+}
 
 log = logging.getLogger(__name__)
 
@@ -177,9 +203,11 @@ class PackageStage(Stage):
 		report = self.tracker.write_report(self.paths.cost_report_json)
 		shutil.copy2(self.paths.cost_report_json, out / "cost_report.json")
 
+		number = self._episode_number(out)
 		result = PackageResult(
 			generated_at=datetime.now(UTC),
-			title=script.episode.title,
+			episode_number=number,
+			title=self._numbered_title(script.episode.title, number),
 			description=description,
 			thumbnail_text_options=list(script.episode.thumbnail_text_options),
 			episode_file=episode_name,
@@ -202,3 +230,66 @@ class PackageStage(Stage):
 		if not result.title:
 			log.warning("No episode title; the wrapper prompt returned nothing usable")
 		return result
+
+	def _episode_number(self, out: Path) -> int:
+		"""This run's episode number, stamped once and then kept.
+
+		Re-packaging must not renumber a finished episode, so an existing
+		`metadata.json` wins over the live counter. The counter itself is only
+		advanced by a run that moved the window marker, which is what stops a
+		re-render burning the next episode's number.
+		"""
+		from ..state import episode_number
+
+		existing = out / "metadata.json"
+		if existing.exists():
+			try:
+				recorded = read_json(existing).get("episode_number")
+				if isinstance(recorded, int) and recorded > 0:
+					return recorded
+			except Exception:  # a corrupt manifest is not worth failing a package over
+				pass
+		return episode_number()
+
+	def _numbered_title(self, written: str, number: int) -> str:
+		"""`ML Papers of the Day Ep. N: <title>`.
+
+		Built here rather than asked of the model, because a series prefix is
+		bookkeeping and a model that has to remember which episode this is will
+		eventually get it wrong. The number comes from `state.json`, which is also
+		where the fetch window lives - both advance on a packaged episode.
+
+		The 70-character YouTube ceiling covers the whole string, so the prompt
+		asks for a title that fits what is left. Over the limit it is the written
+		half that is trimmed, never the series name: a viewer scanning a sidebar
+		reads the prefix first and a truncated episode number is worse than a
+		truncated sentence.
+		"""
+		if not written:
+			return ""
+		prefix = f"{SERIES_NAME} Ep. {number}: "
+		room = YOUTUBE_TITLE_MAX - len(prefix)
+		if len(written) > room:
+			# Cut back to a word boundary. "...theorems on their\u2026" stops mid-phrase
+			# and reads as a bug; "...theorems\u2026" reads as an abbreviation. Falls
+			# back to a hard cut only if the first word alone will not fit.
+			clipped = written[: max(room - 1, 0)]
+			if " " in clipped:
+				clipped = clipped[: clipped.rindex(" ")]
+			# A trailing preposition or article dangles: "...theorems on\u2026" still
+			# reads as a sentence that was cut off, where "...theorems\u2026" reads as
+			# a title that was shortened.
+			words = clipped.split()
+			while len(words) > 1 and words[-1].lower() in _DANGLING:
+				words.pop()
+			clipped = " ".join(words)
+			log.warning(
+				"Episode title is %s characters against the %s left by %r; trimmed to "
+				"%r. Tighten prompts/episode/, which asks for a shorter one.",
+				len(written),
+				room,
+				prefix,
+				clipped,
+			)
+			written = clipped.rstrip(" ,;:-") + "\u2026"
+		return prefix + written

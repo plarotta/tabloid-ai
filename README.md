@@ -4,26 +4,17 @@ Automated pipeline that turns the week's notable arXiv AI/ML papers into a short
 video series, **ML Papers of the Day**. `SPEC.md` is the full design;
 `DECISIONS.md` records every choice made along the way.
 
-**New: an editorial video format.** The default now uses a short tension-first
-opening, a clear hook → mechanism → evidence → caveat → payoff in each paper,
-and timed visual builds instead of holding every slide unchanged. Process
-diagrams, contrasting ideas, exact-scale comparisons, and guided paper figures
-share the established dark palette. The renderer runs on Pillow + ffmpeg;
-Manim is optional for the original `classic` style.
-
-Preview it locally, without API keys or research downloads:
+**Optional: an editorial video format** (`render.visual_style: editorial`,
+from PR #1). Timed typography and visual builds on Pillow + ffmpeg, with process
+and contrast layouts. It is off by default: the default `classic` renderer
+draws the 21 manim comparison templates (D46), which the editorial engine
+does not (D48). Preview it locally, without API keys or research downloads:
 
 ```bash
 pipeline demo                           # silent, explicitly illustrative 720p preview
 pipeline demo --height 1080              # production-size layout check
 pipeline demo --narrate                  # uses configured TTS; this option is billed
 ```
-
-The preview, storyboard and example script are in `demos/out/editorial/`.
-The demo uses illustrative content, not generated research claims. The new
-renderer has been exercised with real ffmpeg playback and timing checks; the
-new prompts and contextual voice delivery still need a fresh narrated episode
-review with your API credentials. See [Editorial workflow](#editorial-workflow).
 
 **Historical pipeline validation:** all ten stages built. Stages 1-9 validated end-to-end against live
 APIs across three complete episodes; Stage 10 (upload) runs in dry-run until a
@@ -37,10 +28,9 @@ against episode one's 4:51 at 12.1s and episode three's 5:16 at 13.9s — the
 length and pace work of D34/D35, measured on a finished file. It cost **$2.97**
 over a 2,180-paper catch-up window, most of it Stage 2.
 
-**One caveat on that run:** it was finished with `--from script` after the
-Anthropic account ran out of credit mid-run, and a replay deliberately does not
-advance the window marker (D25). So `state.json` does not yet record this
-episode. See [The fetch window](#the-fetch-window).
+Episodes are numbered: YouTube titles read `ML Papers of the Day Ep. N: <title>`,
+with `N` tracked in `state.json` beside the window marker and advanced by the same
+packaged run (D38).
 
 | Stage | Status | Validated against |
 |---|---|---|
@@ -110,9 +100,10 @@ is estimated before narration and measured when current audio is available.
 Reports are also written automatically to `script/pacing.json` and
 `render/pacing.json`.
 
-The shipped writing budget is 65 seconds per paper, 9–11 scenes, a nine-second
-opening and short signposts only before later papers. These are targets; the
-report and measured narration show what was actually produced. A scene's
+The shipped writing budget is 70 seconds per paper, 9–11 scenes, a twenty-second
+cold open and a short bridge before each paper (D34, D42; PR #1's tighter
+budget was not adopted, D48). These are targets; the report and measured
+narration show what was actually produced. A scene's
 optional `pause_after` controls its rest, while ElevenLabs receives adjacent
 sentences as context for continuity within each segment.
 
@@ -150,7 +141,7 @@ Two workflows, split by whether they can spend money:
 
 | Workflow | Trigger | Secrets | What it does |
 |---|---|---|---|
-| `ci.yml` | every push + PR | **none** | ruff, 249 tests, and the Linux render check |
+| `ci.yml` | every push + PR | **none** | ruff, 410 tests, and the Linux render check (manim included) |
 | `episode.yml` | Tue/Thu 13:00 UTC, or manual | API keys | one full episode, uploaded as an artifact |
 
 **The schedule is off.** Each run spends ~$1.73, so it does nothing until you opt
@@ -181,12 +172,19 @@ of slack before Stage 10's noon publish slot, which absorbs Actions' cron drift.
 not re-cover the same papers — without it, a Tue/Thu cadence against the 4-day
 fallback window would let one paper headline two consecutive episodes.
 
-It advances only after a run that earned it: a full `fetch`→`package` pass, never
-a `--from <stage>` replay or a `--paper` rebuild. It moves to the **end of the
-fetch window**, not to when the run finished, because the ~10 minutes in between
-would otherwise become a permanent hole in coverage. In Actions it persists
-through the cache; a cache miss falls back to the 4-day window, which overlaps
-rather than breaks (D25).
+It advances after any run that **packaged an episode over a real fetch window** —
+including a `--from script` replay, which is how an episode gets finished after an
+outage. A `--paper` rebuild is excluded, and the marker only ever moves forward, so
+re-rendering an old run cannot drag coverage backwards. It moves to the **end of
+the fetch window**, not to when the run finished, because the ~10 minutes in
+between would otherwise become a permanent hole in coverage.
+
+Getting that wrong is expensive rather than merely untidy: the 2026-08-19 episode
+went unrecorded under the old rule, and the next window opened at **14 days and
+3,000 papers** — the `max_papers` cap — instead of 8 days and ~2,400 (D38).
+
+In Actions it persists through the cache; a cache miss falls back to the 4-day
+window, which overlaps rather than breaks (D25).
 
 ## How it is organised
 
@@ -197,6 +195,8 @@ re-runs possible and what keeps development from re-spending on upstream stages.
 ```
 pipeline/
   arxiv.py       Atom API client (rate limiting, paging, de-duplication)
+  oai.py         OAI-PMH bulk harvester, the fallback when the Atom
+                 endpoint refuses us; `fetch.source` picks one (D45)
   eprint.py      e-print download + safe unpacking (tar/gz/pdf)
   latex.py       figure, caption and section extraction from LaTeX source
   figures.py     figure normalisation to raster; PDF-embedded-image fallback
@@ -277,7 +277,7 @@ invocations**: resuming with `--from` does not grant a fresh budget.
 ## Tests
 
 ```bash
-pytest        # 249 tests, no network, no API spend; ffmpeg optional
+pytest        # 410 tests, no network, no API spend; ffmpeg and manim optional
 ruff check .
 ```
 
@@ -319,13 +319,12 @@ the standalone segment, which has to be publishable on its own (D26).
 
 ## Known gaps
 
-- **An episode finished by replay does not record itself.** `_advance_window`
-  requires a `--from fetch` run that reaches `package`, so the 2026-08-19
-  episode — finished with `--from script` — left the marker at 2026-08-12 and its
-  three papers out of the covered ledger. That guard is right for a partial
-  rebuild and wrong for a completed episode, and nothing currently tells the two
-  apart. Until it does, a replayed episode needs its coverage recorded by hand
-  when it is published (D32, D35).
+- **Title backdrops have never generated an image.** `render.title_backdrops` is
+  on and a key is now configured, but the OpenAI account has no credits, so the
+  first real request came back `insufficient_quota` and every title card falls
+  back to the flat design. The compositing was validated against a stand-in; the
+  generator has made exactly one live request and it was refused. Add credit and
+  it costs ~$0.25 an episode, cached so re-renders are free (D39).
 - **The runtime projection is good to about ±5%.** It reads the finished length
   off the word count at Stage 6 rather than waiting for Stage 8. The read rate
   moves with how long the words are — 2.33 to 2.45 spoken words a second across
@@ -333,6 +332,16 @@ the standalone segment, which has to be publishable on its own (D26).
 - **Stage 2's $1.00 target is not a fixed number.** It cost $1.03 on a 3.6-day
   window and $1.63 on a 7.4-day one, because it scores every paper in the window
   (D15, D34). The target wants to scale with the window, or be dropped.
+- **The Atom search endpoint blocked this address for over a day.** It began
+  answering every request with 429 on 2026-09-13 and had not relented 24 hours
+  later, while the website, the RSS feeds and OAI-PMH all answered normally.
+  Stage 1 now has a second interface and `fetch.source` chooses; the config
+  ships pointed at `oai`. The block was probably self-inflicted, because each
+  failed run fires four retries at a server that already refused (D45).
+- **The harvest scans far more than it keeps.** OAI-PMH filters on when a
+  record was last modified, not when it was submitted, and its sets are coarse,
+  so the first live run scanned 10,160 records to keep 2,342. It is free and
+  takes a few minutes; it costs nothing at Stage 2, which only sees survivors.
 - **A run during an arXiv index stall fails loudly** rather than skipping papers
   (D31). That is the right trade, but a scheduled run can fail for reasons that
   have nothing to do with this code — as it did on 2026-08-13.
@@ -364,12 +373,14 @@ the standalone segment, which has to be publishable on its own (D26).
   `render/slides.py`. The ground is since lifted slightly off black, and a sixth
   palette role — `BASE`, for the value a comparison is measured against — was
   added but is not yet drawn by any static slide type (D36).
-- **Animated callouts have never rendered on Linux.** They work on macOS and
-  ship in the 2026-08-19 episode, but manim draws through cairo and pango and the
-  scheduled workflow has never run with the `manim` extra installed. If those
-  libraries are missing on the runner, every callout falls back to a static slide
-  — correctly and silently, which is the failure mode to watch for rather than a
-  crash (D37). The same caveat as the render path itself.
+- **Animated callouts are tested on Linux, but have not shipped from it.** CI
+  installs cairo, pango and manim and renders all twenty-one templates
+  (`tests/test_templates.py`, failing rather than skipping there). No
+  scheduled episode has yet run on the runner, and Arial is absent on Linux, so
+  pango substitutes a fallback face for the callouts' type (D37, D46).
+- **Three templates draw labels and no numbers.** `flow`, `cycle` and `versus`
+  have nothing for the digest check to verify; a true phrase on the wrong box
+  reads as a claim about that box. The prompt rule is the whole defence (D46).
 - **A `note` can describe a different ratio than its bars draw.** `two_bar`
   renders `note` under a brace spanning the gap between the two bars, so a true
   fact about some *other* ratio reads as a claim about the one on screen. It

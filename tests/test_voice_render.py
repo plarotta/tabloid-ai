@@ -244,9 +244,12 @@ class FakeTTS(TTSClient):
 	def __init__(self, duration=4.0):
 		self.duration = duration
 		self.calls = 0
+		# Every per-call settings dict Stage 7 asked for, in order.
+		self.settings_seen: list[dict | None] = []
 
-	def synthesize(self, text, out_path, voice=None):
+	def synthesize(self, text, out_path, voice=None, settings=None):
 		self.calls += 1
+		self.settings_seen.append(settings)
 		out_path = out_path.with_suffix(".aiff")
 		out_path.parent.mkdir(parents=True, exist_ok=True)
 		out_path.write_bytes(b"FAKEAUDIO")
@@ -945,3 +948,224 @@ def test_render_clip_declines_without_manim(ctx, monkeypatch, tmp_path):
 	# No subprocess should be attempted at all.
 	monkeypatch.setattr(animate.subprocess, "run", lambda *a, **k: pytest.fail("manim was invoked"))
 	assert animate.render_clip(visual, SlideContext(), 5.0, tmp_path, "x") is None
+
+
+# --- generated title backdrops: an absent key must change nothing -------------
+
+
+def test_no_key_means_no_backdrop_and_no_call(monkeypatch, tmp_path):
+	"""The OPENAI_API_KEY line has been present but empty for four episodes, so
+	"configured" and "set" are different questions (D39)."""
+	from pipeline.render import backdrop
+
+	monkeypatch.setenv("OPENAI_API_KEY", "")
+	assert backdrop.available() is False
+	monkeypatch.setattr(
+		backdrop, "generate", backdrop.generate
+	)  # unpatched: it must decline on its own
+	assert backdrop.generate("anything", tmp_path) is None
+	assert not list(tmp_path.glob("*.png"))
+
+
+def test_a_cached_backdrop_is_not_generated_twice(monkeypatch, tmp_path):
+	"""Stage 8 is re-run constantly while tuning and must not bill for it."""
+	from pipeline.render import backdrop
+
+	monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+	monkeypatch.setattr(backdrop, "available", lambda: True)
+	key = backdrop.prompt_for("A subject")
+	import hashlib
+
+	h = hashlib.sha256(f"gpt-image-1|1536x1024|medium|{key}".encode()).hexdigest()[:16]
+	(tmp_path / f"{h}.png").write_bytes(b"CACHED")
+
+	def explode(*a, **k):
+		pytest.fail("a cached backdrop was regenerated")
+
+	monkeypatch.setattr(backdrop, "generate", backdrop.generate)
+	import sys
+
+	sys.modules.pop("openai", None)
+	monkeypatch.setitem(sys.modules, "openai", type("m", (), {"OpenAI": explode}))
+	assert backdrop.generate("A subject", tmp_path).read_bytes() == b"CACHED"
+
+
+def test_an_unreadable_backdrop_falls_back_to_the_flat_ground(tmp_path):
+	from pipeline.render.slides import BG, SlideContext, backdrop_ground
+
+	bad = tmp_path / "not-an-image.png"
+	bad.write_bytes(b"nope")
+	ctx = SlideContext(width=320, height=180)
+	assert colours(backdrop_ground(ctx, bad)) == {BG}
+
+
+def test_only_the_title_card_gets_a_backdrop(ctx, tmp_path, monkeypatch):
+	"""An image behind a figure would compete with the one thing the format
+	exists to show."""
+	from pipeline.render import backdrop as backdrop_mod
+	from pipeline.render.slides import SlideContext
+
+	asked = []
+	monkeypatch.setattr(
+		backdrop_mod, "generate", lambda subject, *a, **k: asked.append(subject) or None
+	)
+	ctx.config.render.title_backdrops = True
+	stage = RenderStage(ctx)
+	sctx = SlideContext(width=320, height=180, segment_label="Seg")
+
+	from pipeline.schemas import Visual
+
+	assert stage._backdrop_for(Visual(type="figure", title="T"), sctx) is None
+	assert stage._backdrop_for(Visual(type="bullet_slide", title="T"), sctx) is None
+	stage._backdrop_for(Visual(type="title_card", title="A hook"), sctx)
+	assert asked == ["A hook"]
+
+
+def test_backdrops_off_asks_for_nothing(ctx, monkeypatch):
+	from pipeline.render import backdrop as backdrop_mod
+	from pipeline.render.slides import SlideContext
+	from pipeline.schemas import Visual
+
+	monkeypatch.setattr(
+		backdrop_mod, "generate", lambda *a, **k: pytest.fail("generated while switched off")
+	)
+	ctx.config.render.title_backdrops = False
+	assert (
+		RenderStage(ctx)._backdrop_for(Visual(type="title_card", title="T"), SlideContext()) is None
+	)
+
+
+# --- staged reveals (D42) ----------------------------------------------------
+
+
+def _slide_ctx():
+	return SlideContext(width=1920, height=1080, eyebrow="TEST", arxiv_id="2609.00001")
+
+
+@pytest.mark.parametrize(
+	"visual,expected",
+	[
+		({"type": "bullet_slide", "bullets": ["one", "two", "three"]}, [1, 2, 3]),
+		({"type": "bullet_slide", "bullets": ["only one"]}, []),
+		({"type": "result_callout", "highlight": "42%"}, [0, 1]),
+		({"type": "figure", "figure_file": "f1.png", "highlight": "a caption"}, [0, 1]),
+		({"type": "figure", "figure_file": "f1.png"}, []),
+		({"type": "title_card", "title": "A card"}, []),
+		({"type": "transition", "title": "Bridge"}, []),
+	],
+)
+def test_which_slides_have_something_to_stage(visual, expected):
+	"""A reveal needs two states. A lone bullet, a captionless figure and the
+	cards have one, so they stay stills rather than becoming one-frame clips."""
+	from pipeline.render import reveal
+	from pipeline.schemas import Visual
+
+	assert reveal.reveal_steps(Visual.model_validate(visual)) == expected
+
+
+def test_a_callout_with_a_comparison_is_left_to_manim():
+	"""Both moving paths would claim this scene; manim goes first, so the reveal
+	must decline it or a chart would be rendered as fading text."""
+	from pipeline.render import reveal
+	from pipeline.schemas import Visual
+
+	visual = Visual.model_validate(
+		{
+			"type": "result_callout",
+			"highlight": "200",
+			"comparison": {"template": "count_up", "label_a": "tokens", "value_a": 200},
+		}
+	)
+	assert reveal.reveal_steps(visual) == []
+
+
+def test_the_default_render_is_still_the_whole_slide():
+	"""`reveal=None` is what every caller outside the reveal module passes, so it
+	has to be byte-identical to the fully revealed slide."""
+	from pipeline.schemas import Visual
+
+	visual = Visual.model_validate(
+		{"type": "bullet_slide", "title": "Findings", "bullets": ["one", "two", "three"]}
+	)
+	default = render_visual(_slide_ctx(), visual)
+	full = render_visual(_slide_ctx(), visual, reveal=3)
+	assert default.tobytes() == full.tobytes()
+
+
+def test_a_partial_reveal_does_not_move_what_is_already_drawn():
+	"""The reason states are rendered from the finished layout: if the block
+	recentred per state the text would slide up the frame instead of adding to
+	it. The first row must land on the same pixels in every state."""
+	from pipeline.schemas import Visual
+
+	visual = Visual.model_validate(
+		{"type": "bullet_slide", "title": "Findings", "bullets": ["one", "two", "three"]}
+	)
+	one = render_visual(_slide_ctx(), visual, reveal=1)
+	three = render_visual(_slide_ctx(), visual, reveal=3)
+	# Top third holds the title and the first row in both.
+	band = (0, 0, 1920, 420)
+	assert one.crop(band).tobytes() == three.crop(band).tobytes()
+	assert one.tobytes() != three.tobytes(), "later rows should still be missing"
+
+
+# --- per-scene voice settings (D42) ------------------------------------------
+
+
+def _scene(visual_type: str, sid: str = "s1"):
+	return SceneManifest.model_validate(
+		{
+			"arxiv_id": "2609.00001",
+			"scenes": [
+				{
+					"id": sid,
+					"narration": "A line.",
+					"visual": {"type": visual_type, "title": "t", "highlight": "1"},
+					"est_seconds": 4,
+				}
+			],
+		}
+	).scenes[0]
+
+
+def test_a_headline_number_is_read_less_evenly_than_a_caveat(ctx):
+	"""D21's monotony: every clip in Ep. 6 used the same four numbers. Lower
+	stability is more variation in the read, so the number lifts and the caveat
+	settles - and the caveat must not come out livelier than the number."""
+	from pipeline.stages.voice import VoiceStage
+
+	ctx.config.tts.voice_settings = {"stability": 0.40, "similarity_boost": 0.75, "style": 0.30}
+	stage = VoiceStage(ctx)
+	number = stage._scene_settings(_scene("result_callout"), 3, 9)
+	caveat = stage._scene_settings(_scene("bullet_slide"), 7, 9)
+	assert number["stability"] < caveat["stability"]
+	assert number["style"] > caveat["style"]
+
+
+def test_scene_settings_stay_inside_the_providers_range(ctx):
+	from pipeline.stages.voice import VoiceStage
+
+	ctx.config.tts.voice_settings = {"stability": 0.95, "similarity_boost": 0.75, "style": 0.95}
+	stage = VoiceStage(ctx)
+	for index, vtype in itertools.product(range(9), ["result_callout", "title_card", "figure"]):
+		out = stage._scene_settings(_scene(vtype), index, 9)
+		assert 0.0 <= out["stability"] <= 1.0
+		assert 0.0 <= out["style"] <= 1.0
+
+
+def test_variation_can_be_switched_off(ctx):
+	"""Off means the client's own settings are used, not a computed copy."""
+	from pipeline.stages.voice import VoiceStage
+
+	ctx.config.tts.voice_settings = {"stability": 0.40, "style": 0.30}
+	ctx.config.tts.vary_by_scene = False
+	assert VoiceStage(ctx)._scene_settings(_scene("result_callout"), 0, 9) is None
+
+
+def test_no_configured_settings_means_none_are_sent(ctx):
+	"""An empty `voice_settings` is how a run asks for the voice's own defaults;
+	varying from nothing would start sending settings that were never chosen."""
+	from pipeline.stages.voice import VoiceStage
+
+	ctx.config.tts.voice_settings = {}
+	assert VoiceStage(ctx)._scene_settings(_scene("result_callout"), 0, 9) is None

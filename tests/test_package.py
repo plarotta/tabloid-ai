@@ -8,6 +8,7 @@ offsets are asserted directly rather than through a rendered episode.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 from pipeline.schemas import SceneAudio, SegmentAudio, VoiceResult
@@ -79,3 +80,93 @@ def test_chapters_start_at_zero_for_youtube():
 def test_timestamp_switches_format_past_an_hour():
 	assert timestamp(87) == "1:27"
 	assert timestamp(3723) == "1:02:03"
+
+
+# --- the series prefix and episode number ------------------------------------
+
+
+def _numbered(ctx, written: str, number: int, state_path):
+	from pipeline.stages.package import PackageStage
+
+	return PackageStage(ctx)._numbered_title(written, number)
+
+
+def test_the_title_carries_the_series_and_the_number(ctx, tmp_path):
+	assert (
+		_numbered(ctx, "Robots hijacked with a sheet of paper", 4, tmp_path)
+		== "ML Papers of the Day Ep. 4: Robots hijacked with a sheet of paper"
+	)
+
+
+def test_an_over_long_title_loses_its_own_words_not_the_series(ctx, tmp_path):
+	"""A viewer scanning a sidebar reads the prefix first, so a truncated episode
+	number is worse than a truncated sentence."""
+	from pipeline.stages.script import SERIES_NAME, YOUTUBE_TITLE_MAX
+
+	out = _numbered(ctx, "a" * 200, 4, tmp_path)
+	assert len(out) <= YOUTUBE_TITLE_MAX
+	assert out.startswith(f"{SERIES_NAME} Ep. 4: ")
+	assert out.endswith("…")
+
+
+def test_no_title_stays_no_title(ctx, tmp_path):
+	"""Stage 10 refuses to publish an untitled bundle; a bare prefix would slip
+	past that check while saying nothing."""
+	assert _numbered(ctx, "", 4, tmp_path) == ""
+
+
+def test_the_episode_number_advances_once_per_packaged_episode(tmp_path):
+	from pipeline.state import advance_episode_number, episode_number
+
+	sp = tmp_path / "state.json"
+	assert episode_number(sp) == 1, "an unseeded ledger starts at one"
+	sp.write_text(json.dumps({"episode_number": 4}))
+	assert advance_episode_number(sp) == 4, "the run uses 4"
+	assert episode_number(sp) == 5, "and leaves 5 for the next"
+
+
+def test_a_repackaged_episode_keeps_the_number_it_shipped_with(ctx, tmp_path, monkeypatch):
+	"""Re-rendering a finished episode must not relabel it with whatever number
+	the series has since reached (D38)."""
+	from pipeline import state
+	from pipeline.stages.package import PackageStage
+
+	sp = tmp_path / "state.json"
+	sp.write_text(json.dumps({"episode_number": 9}))
+	monkeypatch.setattr(state, "STATE_PATH", sp)
+
+	out = ctx.paths.output_dir
+	out.mkdir(parents=True, exist_ok=True)
+	stage = PackageStage(ctx)
+	assert stage._episode_number(out) == 9, "an unpackaged run takes the live counter"
+
+	(out / "metadata.json").write_text(json.dumps({"episode_number": 3}))
+	assert stage._episode_number(out) == 3, "a packaged one keeps what it stamped"
+
+
+def test_a_corrupt_manifest_falls_back_to_the_counter(ctx, tmp_path, monkeypatch):
+	from pipeline import state
+	from pipeline.stages.package import PackageStage
+
+	sp = tmp_path / "state.json"
+	sp.write_text(json.dumps({"episode_number": 7}))
+	monkeypatch.setattr(state, "STATE_PATH", sp)
+	out = ctx.paths.output_dir
+	out.mkdir(parents=True, exist_ok=True)
+	(out / "metadata.json").write_text("{not json")
+	assert PackageStage(ctx)._episode_number(out) == 7
+
+
+def test_a_trimmed_title_stops_at_a_word(ctx, tmp_path):
+	"""Ep. 4 came back three characters over and was cut to "...on their…", which
+	reads as a bug rather than as an abbreviation (D38)."""
+	out = _numbered(ctx, "AI agents discover math theorems on their own", 4, tmp_path)
+	assert out == "ML Papers of the Day Ep. 4: AI agents discover math theorems…"
+	assert len(out) <= 70
+
+
+def test_a_single_over_long_word_is_still_cut(ctx, tmp_path):
+	"""No word boundary to fall back to, so a hard cut is all that is left."""
+	out = _numbered(ctx, "a" * 90, 4, tmp_path)
+	assert len(out) <= 70
+	assert out.endswith("…")

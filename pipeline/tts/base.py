@@ -29,7 +29,13 @@ class TTSClient(ABC):
 	provider: str
 
 	@abstractmethod
-	def synthesize(self, text: str, out_path: Path, voice: str | None = None) -> SpeechResult:
+	def synthesize(
+		self,
+		text: str,
+		out_path: Path,
+		voice: str | None = None,
+		settings: dict | None = None,
+	) -> SpeechResult:
 		"""Render `text` to an audio file at `out_path` and measure its duration."""
 
 	def synthesize_with_context(
@@ -37,12 +43,13 @@ class TTSClient(ABC):
 		text: str,
 		out_path: Path,
 		voice: str | None = None,
+		settings: dict | None = None,
 		*,
 		previous_text: str = "",
 		next_text: str = "",
 	) -> SpeechResult:
 		"""Providers may use adjacent sentences for continuity; the default is unchanged."""
-		return self.synthesize(text, out_path, voice)
+		return self.synthesize(text, out_path, voice, settings)
 
 
 def build_tts_client(provider: str | None, model: str | None = None) -> TTSClient:

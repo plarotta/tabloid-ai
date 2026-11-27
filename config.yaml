@@ -3,12 +3,28 @@
 
 fetch:
   categories: [cs.LG, cs.CL, cs.CV, cs.AI, stat.ML]
+  # Which arXiv interface Stage 1 reads (D45).
+  #
+  # `api` is the Atom search endpoint and was the only one until 2026-09-13,
+  # when it began answering every request from this address with 429 and was
+  # still doing so more than a day later. The website, the RSS feeds and the
+  # OAI-PMH endpoint all answered normally throughout, so the block was scoped
+  # to that one endpoint.
+  #
+  # `oai` is the bulk harvester arXiv publishes for exactly this use. It costs
+  # a coarser window - its dates have no time of day, and it filters on when a
+  # record was last modified rather than when it was submitted, so the harvest
+  # nets more and is filtered here. Switch back to `api` when it lets us in.
+  source: oai
   # Fallback window when no previous successful run is recorded.
   fallback_window_days: 4
   # arXiv asks for >=3s between requests. Page size capped by their API.
   page_size: 200
   request_delay_seconds: 3.0
   max_retries: 5
+  # First wait after a 429, doubling per attempt and capped at 5 minutes. A rate
+  # limit resets in minutes; the polite delay above is for flaky connections (D40).
+  rate_limit_backoff_seconds: 30.0
   # Hard stop so a bad date window cannot spend unbounded time/money.
   max_papers: 3000
 
@@ -54,9 +70,17 @@ extract:
 script:
   stage_model: script
   max_concurrency: 3
-  # ~162 words, spread across short hooks and longer explanations. The measured
-  # voice is slightly slower than this writing budget; review reports both.
-  target_segment_seconds: 65
+  # Spec Stage 6: 60-90s per paper segment at ~150 words per minute - but the
+  # voice reads at 140-147, so a segment that hits this budget exactly still
+  # runs long. 70 is what puts the finished episode at ~4:46 (D34).
+  target_segment_seconds: 70
+  # Scenes are pace, words are length - the two knobs D29 conflated. A scene is
+  # a slide, so more scenes at the same word count is a faster cut, not a longer
+  # episode. Episode one ran 7-8 scenes a segment; 6 parked each slide on screen
+  # for 13.9s and saved nothing (D34). The max is enforced in code, the min is
+  # asked for in the prompt - there is no safe way to invent a scene.
+  # Raised 7-8 -> 9-11 after Ep. 6 measured at 9.3s a slide, median, with 14 of
+  # 32 slides held past ten seconds. Same words, more cuts: ~7s a slide (D42).
   min_scenes_per_segment: 9
   max_scenes_per_segment: 11
   # Over budget by more than this and the segment (or the cold open) is sent
@@ -67,13 +91,31 @@ script:
   # Passes per part. One took the worst segment 279 -> 242 words against 175:
   # short of the budget but still moving, so it gets one more go.
   condense_max_passes: 2
-  # Two beats: tension, then promise. Branding is visible, not read aloud.
-  cold_open_seconds: 9
-  # Paper one starts immediately. Later papers get one brief, plain signpost.
-  transition_seconds: 3
-  # Retained for cached scripts; the current wrapper does not write an outro.
-  outro_seconds: 10
-  words_per_minute: 150
+  # Three scenes: the thesis, the most striking number in the episode, and one
+  # line handing into the papers. Was 8s and one scene (the series name and the
+  # thread) until the owner reviewed Ep. 5 and asked for the punchline first -
+  # the first twenty seconds were three framings before a single finding.
+  cold_open_seconds: 20
+  # One bridge before each paper. Cut 5 -> 3 because a bridge is the second dark
+  # card in a row after the segment's own title card, and the owner called the
+  # repetition Keynote-like. Shorter and more interruptive is the ask.
+  # Back to 6 after Ep. 7: this number is only ever read as a word budget, and at
+  # 3 it computed an 8-word cap while the prompt's own worked examples ran 12-14.
+  # The model followed the examples, so every bridge overshot a cap nothing
+  # enforces. 6 gives 16 words, which is what the examples - and D35's "one clause
+  # on what just settled, then name the next" - actually cost. Adds ~9s.
+  transition_seconds: 6
+  # The synthesis: what the three showed together, then the takeaway. Two
+  # scenes. Unused since v5 (which cut the sign-off); the outro is back as an
+  # argument rather than a goodbye, and the prompt still forbids a sign-off.
+  outro_seconds: 14
+  # Measured off Ep. 5: the ElevenLabs "Adam" read is 2.12 words/sec, or 127
+  # wpm, against Bella's 2.33-2.45. At 150 every second-budget in this file
+  # under-read the finished part by ~13%, which is how a 4:09 projection became
+  # a 4:42 episode. 130 is the measured rate rounded, so the budgets convert
+  # honestly and the segments come back proportionally shorter - which is what
+  # pays for the longer cold open and the outro.
+  words_per_minute: 130
 
 budget:
   # Fail the run if projected spend exceeds this.
@@ -128,10 +170,20 @@ tts:
   # Was eleven_turbo_v2_5, which is the latency-optimised model - nothing here
   # needs low latency, and the owner review heard the difference (D28).
   model: eleven_multilingual_v2
-  # ElevenLabs "Bella". Chosen from the samples in
-  # runs/_voice_samples/elevenlabs/ after both macOS engines were rejected as
-  # robotic (DECISIONS.md D22). Re-sampled 2026-08-13 - see runs/_voice_samples/.
-  voice: EXAVITQu4vr4xnSDxMaL
+  # ElevenLabs "Antoni", from Ep. 8. Episodes 1-5 were "Bella"
+  # (EXAVITQu4vr4xnSDxMaL) and 6-7 were "Adam" (pNInz6obpgDQGcFmaJgB); all three
+  # come from the same sampled set in runs/_voice_samples/, chosen after both
+  # macOS engines were rejected as robotic (DECISIONS.md D22), so swapping is one
+  # line. Adam went because the owner heard it as too Southern (review of Ep. 7).
+  # voice_settings below are unchanged from D28's tuning.
+  #
+  # Pace: on the same sample line Antoni came in 12% faster than Adam. Adam's
+  # long-form rate was measured at 2.12 words/sec (127 wpm) off a finished
+  # episode, which is where `script.words_per_minute: 130` comes from. That
+  # number is deliberately NOT being retuned off a seven-second sample - so
+  # expect Ep. 8 to land shorter than Stage 6 projects rather than longer, which
+  # is the safe direction (D34), and set the rate from the finished file.
+  voice: ErXwobaYiN019PkySvjV
   # Never sent before D28, so every read ran at the voice's flat defaults.
   # Lower stability is what buys variation across a five-minute narration.
   voice_settings:
@@ -139,16 +191,26 @@ tts:
     similarity_boost: 0.75
     style: 0.30
     use_speaker_boost: true
-  # Continuous explanation with longer rests only where a scene requests one.
-  scene_gap_seconds: 0.14
-  bridge_pause_seconds: 0.30
+  # Small per-scene nudges to the settings above, by what the scene is doing:
+  # the opening and a headline number get a little more lift, the caveat scene
+  # settles. D21 named the monotony - one voice, one pace, no variation across
+  # five minutes - and this is the Stage 7 half of the fix (D42).
+  vary_by_scene: true
+  # A beat at every scene change, added to the clip itself.
+  scene_gap_seconds: 0.35
+  # The rest after a bridge line, before the next paper starts. Cut 1.0 -> 0.35
+  # with the bridge itself: a one-second hold on a dark card is most of what
+  # made the seams feel like a slide deck (owner, Ep. 5 review).
+  bridge_pause_seconds: 0.35
   words_per_minute: 150
 
 # Stage 8. Engine decision deferred to Phase 4 (see DECISIONS.md D6).
 render:
-  # Timed typography, mechanism builds and evidence charts, using Pillow/ffmpeg.
-  # `classic` retains the original slide and optional Manim renderer.
-  visual_style: editorial
+  # `classic` is the slide renderer with manim's 21 comparison templates (D46).
+  # `editorial` is PR #1's Pillow/ffmpeg engine - timed typography and builds -
+  # kept as an opt-in. It draws only two_bar, split and count_up; any other
+  # template falls back to its static callout there (D48).
+  visual_style: classic
   width: 1920
   height: 1080
   fps: 30
@@ -173,6 +235,19 @@ render:
   # failing or slow, so turning it on cannot break a run.
   animated_callouts: true
   animate_timeout_seconds: 120
+  # Staged reveals on the ordinary slide types: bullets arrive a row at a time,
+  # a headline number lands on a rule already drawn, a figure's caption follows
+  # the figure. Ep. 6 had 3 moving scenes out of 32 because motion was gated to
+  # the manim comparison templates; this is what covers the other twenty-odd.
+  # Pillow and ffmpeg only - no manim - so it works on the Linux runner, which
+  # has never successfully drawn a callout (D37). Falls back to the still on any
+  # failure, and needs crossfade_seconds > 0 for the same reason motion does.
+  slide_reveals: true
+  # A generated image behind each title card (D39). ~$0.06 an image and four
+  # per episode; cached in runs/<id>/render/_backdrops so re-rendering is free.
+  # Falls back to the flat card without OPENAI_API_KEY or on any failure.
+  title_backdrops: true
+  backdrop_model: gpt-image-1
   # Off by default: no licensed track is shipped, and the synthesised fallback
   # reads as hum once audible. Drop a royalty-free file in assets/music/ and set
   # this to true. See DECISIONS.md D21.
