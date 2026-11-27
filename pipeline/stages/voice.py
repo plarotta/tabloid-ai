@@ -109,8 +109,19 @@ class VoiceStage(Stage):
 		stability = base.get("stability", 0.4)
 		style = base.get("style", 0.3)
 		vtype = getattr(scene.visual, "type", "")
+		beat = getattr(scene, "beat", None)
 
-		if index == 0 or vtype == "title_card":
+		# The script's own story beat, when it gave one (script v11, D50), says
+		# what the line is doing better than the slide type can guess.
+		if beat in ("hook", "payoff"):
+			stability, style = stability - 0.08, style + 0.12
+		elif beat == "evidence" and vtype == "result_callout":
+			stability, style = stability - 0.10, style + 0.15
+		elif beat == "caveat":
+			stability, style = stability + 0.15, style - 0.10
+		elif beat in ("context", "mechanism", "evidence"):
+			return dict(base)
+		elif index == 0 or vtype == "title_card":
 			stability, style = stability - 0.05, style + 0.10
 		elif vtype == "result_callout":
 			stability, style = stability - 0.10, style + 0.15

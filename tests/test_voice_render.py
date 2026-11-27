@@ -64,15 +64,21 @@ def test_title_card_uses_the_visual_system():
 	assert CTX.accent in cols, "accent rule present"
 
 
-def test_every_part_wears_the_one_accent():
-	"""D27 gave each paper its own hue; D35 put episode one's single accent back.
-	Whatever the running order, the accent is the same and it reaches the frame."""
-	from pipeline.render.slides import ACCENT
+def test_each_paper_wears_its_own_colour_and_the_wrapper_the_series_one():
+	"""D50: a chapter colour per paper on D35's dark ground; the wrapper keeps the
+	series accent. Each colour reaches the frame of its own title card."""
+	from pipeline.render.slides import PAPER_ACCENTS, SERIES_ACCENT
 
-	for index in (None, 0, 1, 2):
+	wrapper = SlideContext(width=640, height=360, arxiv_id="x", paper_index=None)
+	assert wrapper.accent == SERIES_ACCENT
+	assert SERIES_ACCENT in colours(title_card(wrapper, "A Clear Finding"))
+	seen = set()
+	for index in (0, 1, 2):
 		ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=index)
-		assert ctx.accent == ACCENT
-		assert ACCENT in colours(title_card(ctx, "A Clear Finding"))
+		assert ctx.accent == PAPER_ACCENTS[index]
+		assert ctx.accent in colours(title_card(ctx, "A Clear Finding"))
+		seen.add(ctx.accent)
+	assert len(seen) == 3
 
 
 def test_the_running_order_still_indexes_the_accent_list():
@@ -88,25 +94,25 @@ def test_transition_card_does_not_share_the_title_card_ground():
 	"""Its whole job is to be unmistakably not-a-segment for a few seconds. On the
 	plain ground it would read as one more title card, which is the monotony it
 	exists to break."""
-	from pipeline.render.slides import tint, transition_card
+	from pipeline.render.slides import transition_card
 
 	ctx = SlideContext(width=640, height=360, arxiv_id="x", paper_index=0)
 	cols = colours(transition_card(ctx, "Another way in", "02 / 03"))
-	assert tint(ctx.accent) in cols
+	assert ctx.accent in cols
 	assert BG not in cols, "the bridge must not sit on the segment ground"
 	assert colours(title_card(ctx, "Another way in")) != cols
 
 
-def test_the_bridge_ground_is_the_accent_washed_into_the_ground():
-	"""Under D27 the wash carried the *next* paper's hue, so the colour of the
-	coming chapter arrived a beat early. With one accent there is no such signal
-	left - the wash now only says "not a segment", which is the job that
-	survives (D35)."""
-	from pipeline.render.slides import tint, transition_card
+def test_the_bridge_ground_is_the_incoming_papers_colour():
+	"""D50: a full field of the next paper's colour, so the chapter's colour
+	arrives with the bridge and stays as the title card's slab."""
+	from pipeline.render.slides import transition_card
 
 	for index in (0, 1, 2):
 		ctx = SlideContext(width=320, height=180, paper_index=index)
-		assert tint(accent_for(index)) in colours(transition_card(ctx, "x", "01"))
+		bridge = transition_card(ctx, "x", "01")
+		assert bridge.getpixel((2, 2)) == accent_for(index)
+		assert title_card(ctx, "x").getpixel((2, 2)) == accent_for(index)
 
 
 def test_transition_card_renders_without_a_marker():

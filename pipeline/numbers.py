@@ -76,6 +76,27 @@ def digit_numbers(text: str) -> list[float]:
 	return out
 
 
+# Fractions a narration uses as proportions: "half of them", "a third of runs".
+# Read as the percentage they claim, since that is how digests state shares.
+_FRACTIONS = {
+	"half": 50.0,
+	"a third": 100 / 3,
+	"one third": 100 / 3,
+	"two thirds": 200 / 3,
+	"a quarter": 25.0,
+	"one quarter": 25.0,
+	"three quarters": 75.0,
+}
+_FRACTION_RE = re.compile(
+	r"\b(" + "|".join(sorted(map(re.escape, _FRACTIONS), key=len, reverse=True)) + r")\b"
+)
+
+
+def fraction_numbers(text: str) -> list[float]:
+	"""Proportions said as fractions, as percentages: "half of them" is 50."""
+	return [_FRACTIONS[m] for m in _FRACTION_RE.findall((text or "").lower())]
+
+
 def spoken_numbers(text: str) -> list[float]:
 	"""Every number spelled out in words, as the narration writes them.
 
@@ -191,4 +212,12 @@ def worth_checking(v: float) -> bool:
 def unbacked(text: str, digest: Digest, spoken: bool = False) -> list[str]:
 	"""The numbers in `text` the digest neither states nor derives, as written."""
 	found = spoken_numbers(text) if spoken else digit_numbers(text)
-	return [f"{v:g}" for v in found if worth_checking(v) and not digest.backs(v)]
+	flags = [f"{v:g}" for v in found if worth_checking(v) and not digest.backs(v)]
+	if spoken:
+		# A fraction is loose by nature, so it passes when any stated share is
+		# within five points of it - "nearly half" for 47% is fine, "half" for
+		# 35 of 100 is not.
+		for v in fraction_numbers(text):
+			if not any(abs(x - v) <= 5 for x in digest.values):
+				flags.append(f"{v:.3g}%")
+	return flags

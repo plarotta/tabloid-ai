@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import read_json, write_json
-from ..render.slides import SlideContext, thumbnail
+from ..render.slides import SlideContext
 from ..schemas import PackageResult
 from ..stage import Stage, StageError
 from .script import SERIES_NAME, YOUTUBE_TITLE_MAX
@@ -123,36 +123,79 @@ class PackageStage(Stage):
 	def load(self) -> PackageResult:
 		return PackageResult.model_validate(read_json(self.paths.output_dir / "metadata.json"))
 
-	def _thumbnail(self, script, enriched: dict, out: Path) -> str | None:
-		"""Template + the top-ranked paper's best figure."""
-		text = ""
-		if script.episode.thumbnail_text_options:
-			# The model is asked for three; the first is its own preferred pick.
-			text = script.episode.thumbnail_text_options[0]
-		text = text or script.episode.title or "New AI papers"
+	def _lead_figure(self, script, enriched: dict) -> tuple[Path | None, tuple | None]:
+		"""The figure the episode itself featured, and the panel it zoomed into.
 
-		figure = None
+		Was `usable_figures[0]`: the paper's first figure, which is usually its
+		dense overview page and at feed size reads as grey texture. A figure the
+		script chose - and better, a panel it pointed the camera at - is the one
+		image the episode already decided was worth looking at.
+		"""
+		from ..render.camera import caption_for
+		from ..render.panels import lettered_panels
+		from ..render.thumbs import load_figure
+
+		for seg in script.segments:
+			root = self.paths.enriched_dir / seg.arxiv_id.replace("/", "_")
+			figs = [
+				s.visual for s in seg.scenes if s.visual.type == "figure" and s.visual.figure_file
+			]
+			figs.sort(key=lambda v: not v.focus)
+			for v in figs:
+				path = root / v.figure_file
+				if not path.exists():
+					continue
+				if v.focus:
+					img = load_figure(path)
+					panels = (
+						lettered_panels(img, caption_for(root / "figures", v.figure_file))
+						if img
+						else {}
+					)
+					if v.focus[0] in panels:
+						return path, panels[v.focus[0]].box
+				return path, None
 		if script.segments:
 			paper = enriched.get(script.segments[0].arxiv_id)
-			if paper is not None:
-				usable = paper.usable_figures
-				if usable:
-					candidate = (
-						self.paths.enriched_dir / paper.arxiv_id.replace("/", "_") / usable[0].file
-					)
-					if candidate.exists():
-						figure = candidate
+			if paper is not None and paper.usable_figures:
+				root = self.paths.enriched_dir / paper.arxiv_id.replace("/", "_")
+				path = root / paper.usable_figures[0].file
+				if path.exists():
+					return path, None
+		return None, None
 
+	def _thumbnail(
+		self, script, enriched: dict, out: Path
+	) -> tuple[str | None, list[str], str | None]:
+		"""Up to three hero thumbnails, one per text option, plus a preview sheet (D50)."""
+		from ..render.slides import PAPER_ACCENTS
+		from ..render.thumbs import hero, preview_sheet
+
+		options = [t for t in script.episode.thumbnail_text_options if t.strip()][:3]
+		if not options:
+			options = [script.episode.title or "New AI papers"]
+		figure, panel = self._lead_figure(script, enriched)
 		ctx = SlideContext(width=THUMB_W, height=THUMB_H)
-		img = thumbnail(ctx, text, figure, kicker="arXiv this week")
-		path = out / "thumbnail.png"
-		img.save(path, "PNG")
 
-		size_kb = path.stat().st_size / 1024
-		if size_kb > 2048:
-			log.warning("Thumbnail is %.0f KB, over YouTube's 2 MB limit", size_kb)
-		log.info("Thumbnail: %s (%.0f KB)%s", path.name, size_kb, "" if figure else " [no figure]")
-		return path.name
+		names, images = [], []
+		for i, text in enumerate(options):
+			img = hero(ctx, text, figure, accent=PAPER_ACCENTS[i % len(PAPER_ACCENTS)], panel=panel)
+			name = "thumbnail.png" if i == 0 else f"thumbnail_{i + 1}.png"
+			path = out / name
+			img.save(path, "PNG")
+			if path.stat().st_size > 2 * 1024 * 1024:
+				log.warning("%s is over YouTube's 2 MB limit", name)
+			names.append(name)
+			images.append(img)
+		preview = out / "thumbnail_preview.png"
+		preview_sheet(images, [n.removesuffix(".png") for n in names]).save(preview)
+		log.info(
+			"Thumbnails: %s%s; compare them at feed size in %s",
+			", ".join(names),
+			"" if figure else " [no figure]",
+			preview.name,
+		)
+		return names[0], names[1:], preview.name
 
 	def run(self) -> PackageResult:
 		from .enrich import EnrichStage
@@ -204,6 +247,7 @@ class PackageStage(Stage):
 		shutil.copy2(self.paths.cost_report_json, out / "cost_report.json")
 
 		number = self._episode_number(out)
+		thumb, variants, preview = self._thumbnail(script, enriched, out)
 		result = PackageResult(
 			generated_at=datetime.now(UTC),
 			episode_number=number,
@@ -212,7 +256,9 @@ class PackageStage(Stage):
 			thumbnail_text_options=list(script.episode.thumbnail_text_options),
 			episode_file=episode_name,
 			segment_files=copied,
-			thumbnail_file=self._thumbnail(script, enriched, out),
+			thumbnail_file=thumb,
+			thumbnail_variants=variants,
+			thumbnail_preview=preview,
 			duration_seconds=round(elapsed, 3),
 			chapters=chapters,
 			total_cost_usd=report.total_usd,

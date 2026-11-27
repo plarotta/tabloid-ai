@@ -95,6 +95,10 @@ class ExtractConfig(StrictModel):
 
 class ScriptConfig(StrictModel):
 	stage_model: str = "script"
+	# A second reader for each segment, against its digest (D50). One call per
+	# segment, ~2 cents. Flags unsupported claims for review; never rewrites.
+	# Runs on the script model's client.
+	fact_check: bool = True
 	max_concurrency: int = 3
 	# Spec Stage 6: 60-90s per paper segment, ~150 wpm narration budget. 75 -> 70
 	# on measurement: the 2026-08-19 segments hit their 75s budget exactly and
@@ -207,6 +211,10 @@ class RenderConfig(StrictModel):
 	animated_callouts: bool = True
 	# Staged reveals on the ordinary slide types (D42).
 	slide_reveals: bool = True
+	# The camera on a figure the script pointed at a panel of: whole figure,
+	# then a push into the panel with the rest dimmed (D50). Needs the same
+	# per-slide path as reveals; falls back to the reveal or the still.
+	figure_tour: bool = True
 	# Per clip. A template takes ~3s at 1080p30; this is the point at which a
 	# scene is not worth waiting for and the still is used instead.
 	animate_timeout_seconds: int = 120

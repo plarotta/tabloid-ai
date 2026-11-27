@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import REPO_ROOT, read_json, write_json
-from ..render import animate, captions, editorial, reveal
+from ..render import animate, camera, captions, editorial, reveal
 from ..render import backdrop as backdrops
 from ..render.captions import Cue
 from ..render.slides import BG as SLIDE_BG
@@ -204,6 +204,14 @@ class RenderStage(Stage):
 					slides.append(Slide(moving, scene.visual.type, scene.narration, animated=True))
 					continue
 
+			# A figure the script pointed at a panel of gets the camera (D50).
+			v = scene.visual
+			if revealing and cfg.figure_tour and v.type == "figure" and v.focus:
+				toured = self._tour(v, ctx, clip.duration_seconds + hold, out_dir, i, scene.id)
+				if toured is not None:
+					slides.append(Slide(toured, scene.visual.type, scene.narration, animated=True))
+					continue
+
 			# manim first, then this: a callout with a comparison should be drawn
 			# as a chart rather than faded up as text.
 			if revealing and reveal.wants_reveal(scene.visual):
@@ -226,6 +234,27 @@ class RenderStage(Stage):
 			img.save(path, "PNG")
 			slides.append(Slide(path, scene.visual.type, scene.narration))
 		return slides
+
+	def _tour(self, visual, ctx: SlideContext, duration: float, out_dir: Path, i: int, sid: str):
+		if not (visual.figure_file and ctx.figures_dir):
+			return None
+		path = ctx.figures_dir / Path(visual.figure_file).name
+		caption = camera.caption_for(ctx.figures_dir, visual.figure_file)
+		num = "".join(c for c in Path(visual.figure_file).stem if c.isdigit()).lstrip("0") or "?"
+		attribution = f"Figure {num}, arXiv:{ctx.arxiv_id}" if ctx.arxiv_id else f"Figure {num}"
+		return camera.render_tour(
+			ctx,
+			path,
+			caption,
+			list(visual.focus),
+			attribution,
+			visual.title or "",
+			visual.highlight or "",
+			duration,
+			out_dir / f"{i:03d}_{sid}.mp4",
+			fps=self.config.render.fps,
+			timeout=self.config.render.animate_timeout_seconds,
+		)
 
 	def _backdrop_for(self, visual, ctx: SlideContext) -> Path | None:
 		"""A generated ground for a title card, or None for the flat one.

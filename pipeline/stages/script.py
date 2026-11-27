@@ -26,11 +26,13 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 
 from ..llm import LLMError, MeteredClient, ProviderUnavailable, parse_json_response
 from ..numbers import Digest, close, spoken_numbers, unbacked
 from ..paths import read_json, write_json
 from ..prompts import load_prompt
+from ..render.panels import offered_letters
 from ..schemas import (
 	Comparison,
 	EnrichedPaper,
@@ -187,12 +189,49 @@ def digest_to_prompt_text(d: PaperDigest) -> str:
 	return "\n".join(lines)
 
 
-def format_figures(paper: EnrichedPaper | None) -> str:
+def _flag_repeated_titles(segments: list[SceneManifest]) -> None:
+	"""Segments are written in parallel and never see each other, so two can open
+	on the same hook - 2026-09-18-d50 gave papers one and two the identical title
+	card (D50). Flagged on the later segment for review; the fix is a word."""
+	seen: dict[str, str] = {}
+	for m in segments:
+		if not m.scenes or m.scenes[0].visual.type != "title_card":
+			continue
+		title = " ".join((m.scenes[0].visual.title or "").lower().split())
+		if not title:
+			continue
+		if title in seen:
+			note = f"title card repeats {seen[title]}'s: give this paper its own hook"
+			m.scenes[0].fact_flags.append(note)
+			log.warning("%s/%s: %s", m.arxiv_id, m.scenes[0].id, note)
+		else:
+			seen[title] = m.arxiv_id
+
+
+def format_figures(paper: EnrichedPaper | None, root: Path | None = None) -> str:
+	"""The figure inventory for a prompt. With `root` (the paper's enrich dir),
+	a figure whose panels could be matched to its caption's letters also lists
+	them, which is what lets the script point the camera at one (D50)."""
 	if paper is None or not paper.usable_figures:
 		return "(none available - do not use the figure visual type)"
-	return "\n".join(
-		f"- file: {f.file}\n  caption: {f.caption or '(no caption)'}" for f in paper.usable_figures
-	)
+	out = []
+	for f in paper.usable_figures:
+		entry = f"- file: {f.file}\n  caption: {f.caption or '(no caption)'}"
+		letters = offered_letters(root / f.file, f.caption) if root else []
+		if letters:
+			entry += f"\n  panels: {', '.join(letters)}"
+		out.append(entry)
+	return "\n".join(out)
+
+
+def panel_offers(paper: EnrichedPaper | None, root: Path | None) -> dict[str, set[str]]:
+	if paper is None or root is None:
+		return {}
+	return {
+		f.file: set(offered_letters(root / f.file, f.caption))
+		for f in paper.usable_figures
+		if f.file
+	}
 
 
 def _mmss(seconds: float) -> str:
@@ -237,6 +276,8 @@ def scenes_to_markdown(manifest: SceneManifest, title: str = "") -> str:
 				f"⚠ **not in the digest:** {', '.join(s.unverified_numbers)} - "
 				"check against the paper before this ships",
 			]
+		for flag in s.fact_flags:
+			out += ["", f"⚠ **fact check:** {flag}"]
 		if v.bullets:
 			out += [""] + [f"  - {b}" for b in v.bullets]
 		out.append("")
@@ -322,11 +363,16 @@ class ScriptStage(Stage):
 				scene.visual.comparison = None
 		return manifest
 
+	def _paper_root(self, arxiv_id: str) -> Path | None:
+		root = self.paths.enriched_dir / arxiv_id.replace("/", "_")
+		return root if root.exists() else None
+
 	def _clean_manifest(
 		self, manifest: SceneManifest, paper: EnrichedPaper | None
 	) -> SceneManifest:
 		"""Enforce what the prompt asks for: real figures, speakable narration."""
 		valid = {f.file for f in (paper.usable_figures if paper else []) if f.file}
+		offers = panel_offers(paper, self._paper_root(manifest.arxiv_id)) if paper else {}
 
 		for scene in manifest.scenes:
 			v = scene.visual
@@ -342,6 +388,19 @@ class ScriptStage(Stage):
 					v.type = "bullet_slide"
 			if v.type == "figure" and not v.figure_file:
 				v.type = "bullet_slide"
+			if v.focus:
+				allowed = offers.get(v.figure_file or "", set()) if v.type == "figure" else set()
+				kept = [x.strip().lower().strip("()") for x in v.focus]
+				kept = [x for x in dict.fromkeys(kept) if x in allowed]
+				if len(kept) != len(v.focus):
+					log.warning(
+						"%s/%s: camera focus %s not offered for this figure; keeping %s",
+						manifest.arxiv_id,
+						scene.id,
+						v.focus,
+						kept,
+					)
+				v.focus = kept
 
 			if _LEAKAGE.search(scene.narration):
 				log.warning(
@@ -365,7 +424,7 @@ class ScriptStage(Stage):
 		system, user = prompt.render(
 			arxiv_id=digest.arxiv_id,
 			title=paper.paper.title if paper else digest.arxiv_id,
-			figures=format_figures(paper),
+			figures=format_figures(paper, self._paper_root(digest.arxiv_id)),
 			digest=digest_to_prompt_text(digest),
 			wpm=cfg.words_per_minute,
 			target_seconds=cfg.target_segment_seconds,
@@ -415,7 +474,8 @@ class ScriptStage(Stage):
 		# After the budget pass, not before: condensing rewrites narration, and a
 		# number checked in a sentence that was then rewritten was not checked.
 		manifest = self._enforce_budget(manifest, target_words, client)
-		return self._check_numbers(self._fit_templates(manifest), digest_text)
+		manifest = self._check_numbers(self._fit_templates(manifest), digest_text)
+		return self._fact_check(manifest, digest_text, client)
 
 	def _fit_templates(self, manifest: SceneManifest) -> SceneManifest:
 		"""Two prompt rules the model broke on the first tightened run, enforced.
@@ -452,6 +512,41 @@ class ScriptStage(Stage):
 						c.value_b,
 						c.value_a,
 					)
+		return manifest
+
+	def _fact_check(
+		self, manifest: SceneManifest, digest_text: str, client: MeteredClient
+	) -> SceneManifest:
+		"""A second model reads the finished segment against its digest (D50).
+
+		D49 holds every *number* to the digest; this reads *meaning*, which is
+		where a concrete, conversational script goes wrong - the right 35 on the
+		wrong half of a claim. Failure of any kind costs the check, never the
+		segment.
+		"""
+		if not self.config.script.fact_check:
+			return manifest
+		try:
+			system, user = load_prompt("factcheck").render(
+				digest=digest_text,
+				scenes="\n".join(f"{s.id}: {s.narration}" for s in manifest.scenes),
+			)
+			resp = client.complete(user, system=system, max_tokens=2048, temperature=0.0)
+			payload = parse_json_response(resp.text)
+			flags = payload.get("flags", []) if isinstance(payload, dict) else []
+		except ProviderUnavailable:
+			raise
+		except Exception as e:
+			log.warning("%s: fact check did not run (%s)", manifest.arxiv_id, e)
+			return manifest
+		by_id = {s.id: s for s in manifest.scenes}
+		for f in flags:
+			scene = by_id.get(str(f.get("scene", "")))
+			if scene is None or not f.get("problem"):
+				continue
+			note = f"{f.get('quote', '').strip()}: {f['problem'].strip()}".strip(": ")
+			scene.fact_flags.append(note)
+			log.warning("%s/%s: fact check - %s", manifest.arxiv_id, scene.id, note)
 		return manifest
 
 	def _check_numbers(self, manifest: SceneManifest, digest_text: str) -> SceneManifest:
@@ -711,6 +806,23 @@ class ScriptStage(Stage):
 			log.warning("No transition into %s; that seam stays a hard cut", ", ".join(missing))
 		return [by_id[a] for a in order if a in by_id]
 
+	def _check_thumbnails(self, options: list[str], digests: list[PaperDigest]) -> list[str]:
+		"""Drop a thumbnail option whose number no paper backs (D50).
+
+		A thumbnail is the most-read text the show produces and the only one with
+		no narration beside it to correct it, so an unbacked number there is not
+		flagged for review like a scene's (D49) - the option is simply not used.
+		"""
+		backing = Digest("\n".join(digest_to_prompt_text(d) for d in digests))
+		kept = []
+		for text in options:
+			bad = unbacked(text.replace("*", ""), backing)
+			if bad:
+				log.warning("Thumbnail option %r: %s not in any digest; dropped", text, bad)
+				continue
+			kept.append(text)
+		return kept
+
 	def _write_episode(
 		self,
 		client: MeteredClient,
@@ -786,6 +898,9 @@ class ScriptStage(Stage):
 					_attach_direction(part, direction)
 			episode.transitions = self._clean_transitions(
 				raw_transitions, [d.arxiv_id for d in digests], first_optional=True
+			)
+			episode.thumbnail_text_options = self._check_thumbnails(
+				episode.thumbnail_text_options, digests
 			)
 		except ProviderUnavailable:
 			# The degraded wrapper below exists for a bad JSON parse. This is not
@@ -922,6 +1037,7 @@ class ScriptStage(Stage):
 			results = [f.result() for f in futures]
 
 		segments = [m for m in results if m is not None]
+		_flag_repeated_titles(segments)
 		if not segments:
 			raise StageError(
 				"Every segment failed to script. Check prompts/script/ and the model's max_tokens."
