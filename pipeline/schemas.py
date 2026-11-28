@@ -496,6 +496,17 @@ class Visual(StrictModel):
 	comparison: Comparison | None = None
 	# A specific table/figure/section from the digest, shown beside the evidence.
 	source: str = ""
+	# Panels of a `figure` the camera visits in order, by the caption's letters
+	# ("b", then "c"). Only letters Stage 6 offered for that figure survive (D50).
+	focus: list[str] = Field(default_factory=list)
+
+	@field_validator("focus", mode="before")
+	@classmethod
+	def _focus_none_is_empty(cls, v):
+		# Models write `"focus": null` on a scene with nothing to point at.
+		if v is None:
+			return []
+		return [v] if isinstance(v, str) else v
 
 
 class Scene(StrictModel):
@@ -513,6 +524,9 @@ class Scene(StrictModel):
 	# derives (D49). Flagged for review, never rewritten: speech cannot be fixed
 	# by deleting a figure from it.
 	unverified_numbers: list[str] = Field(default_factory=list)
+	# A second model's reading of this scene against the digest (D50): claims
+	# it found unsupported, as "quote: problem". Flagged, never rewritten.
+	fact_flags: list[str] = Field(default_factory=list)
 
 
 class SceneManifest(StrictModel):
@@ -695,6 +709,10 @@ class PackageResult(StrictModel):
 	episode_file: str = ""
 	segment_files: list[str] = Field(default_factory=list)
 	thumbnail_file: str | None = None
+	# The other options, rendered for YouTube's Test & Compare (up to three
+	# thumbnails per video), and a sheet of all of them at feed sizes (D50).
+	thumbnail_variants: list[str] = Field(default_factory=list)
+	thumbnail_preview: str | None = None
 	duration_seconds: float = 0.0
 	# Chapter marks derived from measured audio, so they land on the cuts.
 	chapters: list[dict] = Field(default_factory=list)

@@ -32,15 +32,19 @@ log = logging.getLogger(__name__)
 
 # Bans first, because an image model will reach for a chart the moment the
 # subject sounds scientific, and a chart on this channel is a claim.
+# The opener's visual family (D51): paper sheets turning into filaments of
+# light in the series palette, so the wrapper's cards read as part of the same
+# title sequence. Still abstract, still banned from looking like evidence (D39).
 STYLE = (
-	"Abstract non-representational texture for a video title card background. "
-	"Very dark near-black ground (#161A21) with restrained cool blue accents. "
-	"Soft geometric forms, fine grain, deep negative space, out-of-focus depth. "
-	"Editorial and quiet, not futuristic, not neon, not a tech stock image. "
+	"Cinematic abstract 3D artwork in the style of a premium science-documentary "
+	"title sequence. A few thin white paper sheets drift through deep near-black "
+	"navy space (#161A21) and dissolve into glowing filaments of light in electric "
+	"blue (#7AA2F7) with touches of mint (#58D4AC), rose (#F77E9C) and violet "
+	"(#AA92FF). Volumetric light, shallow depth of field, subtle film grain. "
 	"Absolutely no text, letters, numbers, charts, graphs, plots, diagrams, "
 	"arrows, UI, screens, robots, brains, people, hands or logos. "
-	"The left two thirds must stay almost empty and very dark so white type can "
-	"sit on it."
+	"All the light and detail sits in the right third; the left two thirds stay "
+	"dark, calm negative space for white type."
 )
 
 
@@ -73,7 +77,7 @@ def generate(
 	cache_dir: Path,
 	tracker=None,
 	stage: str = "render",
-	model: str = "gpt-image-1",
+	model: str = "gpt-image-2",
 	size: str = "1536x1024",
 	quality: str = "medium",
 	timeout: int = 120,
@@ -83,15 +87,42 @@ def generate(
 	Cached by prompt hash, so re-rendering a run is free and two title cards that
 	somehow ask for the same thing pay once.
 	"""
+	return generate_image(
+		prompt_for(subject),
+		cache_dir,
+		tracker=tracker,
+		stage=stage,
+		model=model,
+		size=size,
+		quality=quality,
+		timeout=timeout,
+		label=subject,
+	)
+
+
+def generate_image(
+	prompt: str,
+	cache_dir: Path,
+	tracker=None,
+	stage: str = "render",
+	model: str = "gpt-image-2",
+	size: str = "1536x1024",
+	quality: str = "medium",
+	timeout: int = 120,
+	label: str = "",
+) -> Path | None:
+	"""One generated image for `prompt`, cached by hash; None on any failure.
+
+	Shared by the title-card backdrops (D39) and the thumbnail art (D52).
+	"""
 	if not available():
 		return None
 
-	prompt = prompt_for(subject)
 	key = hashlib.sha256(f"{model}|{size}|{quality}|{prompt}".encode()).hexdigest()[:16]
 	cache_dir.mkdir(parents=True, exist_ok=True)
 	cached = cache_dir / f"{key}.png"
 	if cached.exists() and cached.stat().st_size > 0:
-		log.debug("Backdrop cache hit for %r", subject[:40])
+		log.debug("Image cache hit for %r", (label or prompt)[:40])
 		return cached
 
 	try:
@@ -101,13 +132,22 @@ def generate(
 		resp = client.images.generate(model=model, prompt=prompt, size=size, quality=quality, n=1)
 		payload = resp.data[0].b64_json if resp.data else None
 		if not payload:
-			log.warning("Image model returned no data; the title card stays flat")
+			log.warning("Image model returned no data for %r", (label or prompt)[:40])
 			return None
 		cached.write_bytes(base64.b64decode(payload))
 	except Exception as e:
-		# Includes refusals, rate limits, timeouts and SDK changes. A title card
-		# without a backdrop is the slide this pipeline shipped for four episodes.
-		log.warning("Backdrop generation failed (%s); the title card stays flat", e)
+		if "does not exist" in str(e):
+			# Not a transient failure and not the key: OpenAI retires image models.
+			# This is how gpt-image-1 failed silently for every episode (D51).
+			log.error(
+				"Image model %r no longer exists for this key; set render.backdrop_model "
+				"to a current one (GET /v1/models lists them)",
+				model,
+			)
+			return None
+		# Includes refusals, rate limits, timeouts and SDK changes. Every caller
+		# has a fallback that shipped for episodes before images existed.
+		log.warning("Image generation failed (%s)", e)
 		return None
 
 	if tracker is not None:
@@ -119,5 +159,5 @@ def generate(
 			output_units=0,
 			kind="image",
 		)
-	log.info("Backdrop generated for %r", subject[:48])
+	log.info("Image generated for %r", (label or prompt)[:48])
 	return cached

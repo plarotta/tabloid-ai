@@ -13,6 +13,28 @@ from pipeline.stage import StageContext
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+_PAID_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "GEMINI_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _no_paid_calls(monkeypatch):
+	"""No test may reach a billed API, whatever `.env` holds.
+
+	The CLI tests call `load_dotenv()`, which put the real OPENAI_API_KEY into
+	os.environ for every test after them; once `gpt-image-2` replaced the retired
+	`gpt-image-1`, the render tests generated real title-card images (~15 of them
+	across three runs on 2026-11-27, D51). Keys are cleared and dotenv is stubbed
+	for every test; a test that needs a key sets a fake one itself.
+	"""
+	for key in _PAID_KEYS:
+		monkeypatch.delenv(key, raising=False)
+	import dotenv
+
+	import pipeline.cli as cli
+
+	monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+	monkeypatch.setattr(cli, "load_dotenv", lambda *a, **k: False)
+
 
 @pytest.fixture
 def pricing() -> Pricing:

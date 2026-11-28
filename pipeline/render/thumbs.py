@@ -22,10 +22,12 @@ a config name to one.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
+from .panels import find_panels
 from .slides import (
 	_BOLD,
 	ACCENT,
@@ -331,3 +333,222 @@ LAYOUTS = {
 	"banner": banner,
 	"type_only": type_only,
 }
+
+
+# --- hero: the D50 thumbnail ---------------------------------------------------
+
+# Appended to every thumbnail scene. The scene is the idea; this is the look,
+# fixed so the channel's thumbnails read as one series (D52).
+THUMB_STYLE = (
+	"Bold, high-contrast 3D illustration for a YouTube thumbnail, glossy stylised "
+	"characters, cinematic rim lighting in electric blue, mint, rose and violet on "
+	"a deep navy background. One subject, large, filling the right 60% of the "
+	"frame, with an expression readable at a tiny size. The left 40% is darker and "
+	"simpler, for overlaid text. Absolutely no text, letters, numbers, logos, "
+	"charts, graphs, screens with writing, real products or real people."
+)
+
+_NUMBER = re.compile(r"^\s*([~<>]?\d[\d,.]*\s?(?:%|x|\u00d7|X)?)\s+(.*)$")
+
+
+def parse_hook(text: str) -> tuple[str, str, set[int]]:
+	"""Split "80% *never* read the files" into ("80%", "never read the files", {0}).
+
+	The number, if the hook leads with one, is set separately and huge. A word
+	wrapped in asterisks is the one to highlight; the asterisks never reach the
+	frame. Returns (number, words, indices of highlighted words).
+	"""
+	text = " ".join((text or "").split())
+	number = ""
+	m = _NUMBER.match(text)
+	if m:
+		number, text = m.group(1).replace(" ", ""), m.group(2)
+	words, marked = [], set()
+	for i, w in enumerate(text.split()):
+		if w.startswith("*") and w.rstrip(".,!").endswith("*") and len(w.strip("*")) > 0:
+			marked.add(i)
+		words.append(w.replace("*", ""))
+	return number, " ".join(words), marked
+
+
+def _fit_words(d, words: list[str], max_w: int, max_h: int, start: int, lines_max: int = 3):
+	"""Largest bold size at which `words` wrap into <= lines_max lines inside the box."""
+	size = start
+	while size > 24:
+		font = bold(size)
+		lines: list[list[int]] = [[]]
+		for i in range(len(words)):
+			trial = " ".join(words[j] for j in [*lines[-1], i])
+			if lines[-1] and d.textlength(trial, font=font) > max_w:
+				lines.append([i])
+			else:
+				lines[-1].append(i)
+		widest = max(d.textlength(" ".join(words[j] for j in ln), font=font) for ln in lines)
+		if len(lines) <= lines_max and widest <= max_w and len(lines) * size * 1.08 <= max_h:
+			return font, lines
+		size = int(size * 0.94)
+	return bold(size), [list(range(len(words)))]
+
+
+def hero(
+	ctx: SlideContext,
+	text: str,
+	figure: Path | None = None,
+	kicker: str = "",
+	accent: tuple[int, int, int] | None = None,
+	panel: tuple[int, int, int, int] | None = None,
+) -> Image.Image:
+	"""One focal element, readable at 168 pixels wide (D50).
+
+	A thumbnail is judged at phone size in a fraction of a second, so it gets one
+	idea: a number set as large as the frame allows, or two to four words with
+	one of them on a highlighter block. The figure is never the whole page - at
+	feed size a paper figure is grey texture - but one panel, cropped to fill
+	its side of the frame on the paper-white it was drawn for.
+	"""
+	accent = accent or ACCENT
+	img = Image.new("RGB", (ctx.width, ctx.height), BG)
+	d = ImageDraw.Draw(img)
+	m = ctx.scaled(56)
+
+	fig = load_figure(figure)
+	text_right = ctx.width - m
+	if fig is not None:
+		if panel is None:
+			# No panel the camera visited: any detected panel will do here. A
+			# thumbnail needs a legible region, not the panel the narration meant,
+			# and the whole page at 168 pixels wide is grey texture.
+			found = find_panels(fig)
+			if len(found) > 1:
+				panel = found[0].box
+		if panel:
+			fig = fig.crop(panel)
+		panel_w = int(ctx.width * 0.44)
+		x0 = ctx.width - panel_w
+		img.paste(place(fig, panel_w, ctx.height, min_retained=0.35), (x0, 0))
+		d.rectangle([x0 - ctx.scaled(12), 0, x0, ctx.height], fill=accent)
+		text_right = x0 - ctx.scaled(44)
+
+	_draw_hook(d, ctx, text, (m, m, text_right, ctx.height - m), accent, kicker)
+	return img
+
+
+def _draw_hook(
+	d: ImageDraw.ImageDraw,
+	ctx: SlideContext,
+	text: str,
+	box: tuple[int, int, int, int],
+	accent: tuple[int, int, int],
+	kicker: str = "",
+	stroke: int = 0,
+) -> None:
+	"""The hook, as large as `box` allows: a number in the accent, words in white,
+	one word on a highlighter block. `stroke` outlines the type in the ground
+	colour, which is what keeps it legible over an illustration."""
+	x0, y, x1, y1 = box
+	ink = BG
+	number, words, marked = parse_hook(text)
+	tokens = words.split()
+	box_w = x1 - x0
+	if kicker:
+		kf = bold(ctx.scaled(30))
+		d.text((x0, y), kicker.upper(), font=kf, fill=accent)
+		y += ctx.scaled(54)
+
+	avail = y1 - y
+	blocks = []
+	if number:
+		nf = fit_text(d, number, _BOLD, box_w, int(avail * 0.58), start=ctx.scaled(300))[0]
+		nb = d.textbbox((0, 0), number, font=nf)
+		blocks.append(("num", nf, nb))
+		avail -= (nb[3] - nb[1]) + ctx.scaled(26)
+	if tokens:
+		wf, lines = _fit_words(
+			d, tokens, box_w, avail, ctx.scaled(150 if number else 170), 2 if number else 3
+		)
+		blocks.append(("words", wf, lines))
+
+	def height(b):
+		if b[0] == "num":
+			return b[2][3] - b[2][1]
+		return int(len(b[2]) * b[1].size * 1.1)
+
+	total = sum(height(b) for b in blocks) + (ctx.scaled(26) if len(blocks) == 2 else 0)
+	y = max(y, y + (y1 - y - total) // 2)
+	for b in blocks:
+		if b[0] == "num":
+			_, nf, nb = b
+			sw = max(int(nf.size * 0.035), 1) if stroke else 0
+			d.text((x0 - nb[0], y - nb[1]), number, font=nf, fill=accent, stroke_width=sw,
+				stroke_fill=ink)  # fmt: skip
+			y += (nb[3] - nb[1]) + ctx.scaled(26)
+			continue
+		_, wf, lines = b
+		sw = max(int(wf.size * 0.06), 1) if stroke else 0
+		for ln in lines:
+			x = x0
+			for j in ln:
+				w = tokens[j]
+				tw = d.textlength(w, font=wf)
+				if j in marked:
+					pad = int(wf.size * 0.12)
+					bb = d.textbbox((x, y), w, font=wf)
+					d.rectangle([bb[0] - pad, bb[1] - pad, bb[2] + pad, bb[3] + pad], fill=accent)
+					d.text((x, y), w, font=wf, fill=ink)
+				else:
+					# A number mid-phrase ("fabricates 96% of doctors") still pops.
+					colour = accent if any(ch.isdigit() for ch in w) else FG
+					d.text((x, y), w, font=wf, fill=colour, stroke_width=sw, stroke_fill=ink)
+				x += tw + d.textlength(" ", font=wf)
+			y += int(wf.size * 1.1)
+
+
+def illustrated(
+	ctx: SlideContext,
+	text: str,
+	art: Path,
+	accent: tuple[int, int, int] | None = None,
+) -> Image.Image | None:
+	"""The D52 thumbnail: a generated illustration full-bleed, the hook over a
+	fade on the left. None if the art will not open, and the caller falls back
+	to `hero`."""
+	accent = accent or ACCENT
+	try:
+		src = Image.open(art).convert("RGB")
+	except Exception as e:
+		log.warning("Thumbnail art %s unusable: %s", art, e)
+		return None
+	img = cover(src, ctx.width, ctx.height, focus=(0.6, 0.5))
+	img = ImageEnhance.Contrast(ImageEnhance.Color(img).enhance(1.15)).enhance(1.06)
+	# Opaque enough under the type to read at 168px, clear by the subject.
+	scrim(img, (0, 0, int(ctx.width * 0.62), ctx.height), horizontal=True, start=225, end=0)
+	d = ImageDraw.Draw(img)
+	m = ctx.scaled(52)
+	d.rectangle([0, 0, ctx.scaled(14), ctx.height], fill=accent)
+	# The scene puts its subject from 40% across; the type stops short of it.
+	_draw_hook(d, ctx, text, (m + ctx.scaled(10), m, int(ctx.width * 0.47), ctx.height - m), accent,
+		stroke=1)  # fmt: skip
+	return img
+
+
+def preview_sheet(images: list[Image.Image], labels: list[str]) -> Image.Image:
+	"""Every option at the three sizes a viewer meets it: home feed (360x202),
+	search (246x138) and the phone's up-next rail (168x94), on YouTube's dark UI.
+	The decision is made on this sheet, not on the 1280x720 originals."""
+	sizes = [(360, 202), (246, 138), (168, 94)]
+	pad = 24
+	row_h = sizes[0][1] + pad
+	sheet = Image.new(
+		"RGB",
+		(pad + sum(w + pad for w, _ in sizes) + 40, pad + row_h * len(images) + 10),
+		(15, 15, 15),
+	)
+	d = ImageDraw.Draw(sheet)
+	for r, (im, label) in enumerate(zip(images, labels, strict=True)):
+		x = pad
+		y = pad + r * row_h
+		for w, h in sizes:
+			sheet.paste(im.resize((w, h), Image.LANCZOS), (x, y))
+			x += w + pad
+		d.text((x, y), label, fill=(170, 170, 170))
+	return sheet

@@ -67,21 +67,38 @@ def wants_reveal(visual) -> bool:
 	return len(reveal_steps(visual)) >= 2
 
 
-def _xfade_chain(n: int, hold: float, fade: float) -> tuple[str, str]:
-	"""Chain n equal-length states with dissolves. Returns (filtergraph, label).
+def _xfade_chain(holds: list[float], fade: float) -> tuple[str, str]:
+	"""Chain states of the given holds with dissolves. Returns (filtergraph, label).
 
 	The same arithmetic Stage 8 uses between scenes: each input runs `hold+fade`
-	and every xfade consumes exactly that overlap, so n states of `hold` come out
-	as `n*hold` rather than accumulating or losing the fades.
+	and every xfade consumes exactly that overlap, so the states come out as
+	`sum(holds)` rather than accumulating or losing the fades.
 	"""
 	parts, prev, cum = [], "s0", 0.0
-	for i in range(1, n):
-		cum += hold
+	for i in range(1, len(holds)):
+		cum += holds[i - 1]
 		parts.append(
 			f"[{prev}][s{i}]xfade=transition=fade:duration={fade:.3f}:offset={cum - fade:.3f}[x{i}]"
 		)
 		prev = f"x{i}"
 	return ";".join(parts), prev
+
+
+# How long the empty state of a two-state reveal holds before the payoff lands.
+# Was half the scene: on the 2026-09-18-d50 render that left a callout's frame
+# blank for three to five seconds while the narration was already saying the
+# number, which read as dead air (D50). A beat, not a wait.
+LEAD_IN = 0.6
+
+
+def _holds(visual, steps: list[int], duration: float) -> list[float]:
+	"""Bullets share the scene evenly - each row is a point being made. A
+	number or a caption arriving is a payoff, so it lands after a short beat."""
+	n = len(steps)
+	if visual.type != "bullet_slide" and n == 2:
+		first = min(LEAD_IN, duration * 0.3)
+		return [first, duration - first]
+	return [duration / n] * n
 
 
 def render_clip(
@@ -117,7 +134,8 @@ def render_clip(
 		n = len(steps)
 		hold = duration / n
 
-	fade = min(STATE_FADE, hold * 0.5)
+	holds = _holds(visual, steps, duration)
+	fade = min(STATE_FADE, min(holds) * 0.5)
 	out_dir.mkdir(parents=True, exist_ok=True)
 
 	frames: list[Path] = []
@@ -129,10 +147,10 @@ def render_clip(
 
 	out = out_dir / f"{name}.mp4"
 	args: list[str] = []
-	for path in frames:
-		args += ["-loop", "1", "-t", f"{hold + fade:.4f}", "-i", str(path)]
+	for path, h in zip(frames, holds, strict=True):
+		args += ["-loop", "1", "-t", f"{h + fade:.4f}", "-i", str(path)]
 	pre = ";".join(f"[{i}:v]format=yuv420p,fps={fps}[s{i}]" for i in range(n))
-	chain, last = _xfade_chain(n, hold, fade)
+	chain, last = _xfade_chain(holds, fade)
 	graph = f"{pre};{chain}" if chain else pre
 
 	cmd = [

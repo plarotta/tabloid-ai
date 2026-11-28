@@ -53,13 +53,15 @@ from manim import (
 	Rectangle,
 	RoundedRectangle,
 	Scene,
-	Text,
 	ValueTracker,
 	VGroup,
 	VMobject,
 	always_redraw,
 	config,
 	rate_functions,
+)
+from manim import (
+	Text as _ManimText,
 )
 
 # Absolute, not relative: manim loads this file by path, so it has no package
@@ -68,6 +70,21 @@ from manim import (
 from pipeline.render.slides import ACCENT, BASE, BASE_TEXT, BG, DIM, FAINT, FG, MARGIN, mix
 
 SPEC: dict = json.loads(os.environ.get("TABLOID_CLIP_SPEC_JSON") or "{}")
+# The paper's own colour, when Stage 8 sent one (D50); the series accent if not.
+ACCENT = tuple(SPEC.get("accent") or ACCENT)
+
+# Pango lays text out on a whole-pixel grid at the size it is asked for, so at
+# the small sizes chart labels use, glyph advances round unevenly and a label
+# like "of runs fail to" reads with ragged spacing. Laying out at 4x and scaling
+# the result down keeps the advances fractional - the standard manim fix.
+_OVERSAMPLE = 4
+
+
+class Text(_ManimText):  # a drop-in for manim's Text
+	def __init__(self, text: str, *args, font_size: float = 48, **kwargs):
+		super().__init__(text, *args, font_size=font_size * _OVERSAMPLE, **kwargs)
+		self.scale(1 / _OVERSAMPLE)
+
 
 # Measured against Pillow at 1920x1080: a manim `font_size` of F renders Arial at
 # about 0.534x the pixel em size Pillow draws at. Without this the chrome on an

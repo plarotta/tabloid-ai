@@ -2129,6 +2129,183 @@ built to miss rather than to cry wolf; it is a review aid, not a gate.
 
 ---
 
+## D50 - Watchable: research-led narration, a camera on the figures, chapter colour, thumbnails
+
+Owner, 2026-11-27: "I need the narratives to be engaging, easy to follow, and
+not super robotic ... the visuals are what is most lacking right now. too
+monotone, and too much of a slideshow. also, need the thumbnails to work."
+Asked for research first, so this entry leads with it.
+
+**What the research says, and what each finding became.**
+
+| Finding | Source | Became |
+|---|---|---|
+| Conversational wording beats formal: median d ~0.8-1.1, 14 of 17 tests | Mayer, personalization principle (Cambridge Handbook of Multimedia Learning) | script v11 allows "you", contractions, one question |
+| Clear exposition left physics misconceptions intact and *raised* confidence; videos that voiced the misconception first taught | Muller, PhD research (Veritasium) | "name the expectation, then break it", once a segment |
+| Concrete examples before the abstract; a single picture that poses a question can be the whole hook | Sanderson (3Blue1Brown), Stanford talk and AMS Notices profile | hooks open on the paper's own case or a question, never the headline |
+| Curiosity is an information gap; it has to close inside the video or retention collapses | Loewenstein (1994) and creator practice | the last scene must answer the hook |
+| Cueing where to look: median d ~0.7 (Mayer), d = .38 over 29 experiments | Signaling principle, Mayer 2021 and a 2726-participant meta-analysis | the figure camera |
+| Speech plus identical on-screen text is redundant | Redundancy principle | "the voice rounds, the screen is exact"; don't read the slide aloud |
+| Segmented lessons beat continuous ones (median d ~0.79) | Segmenting principle | story beats, and `pause_after` on the hook and biggest number |
+| Breakout thumbnails: ~5-word median overlay, one focal element; tested on watch time not CTR | vidIQ study of breakout thumbnails; YouTube Test & Compare | hero thumbnails, three variants, a feed-size preview sheet |
+
+The redundancy effect is the weakest of these (median d ~0.10) and is used
+only as a tie-breaker. Creator advice on cut rates and "first three seconds" has
+no controlled evidence behind it and was not used to set any number.
+
+**Narration (script v11, episode v10).** D35 removed second person as
+mannered. Rereading the episodes it reacted to, the mannered part was
+forty-word sentences carrying three statistics, and a persona's tics. Those stay
+banned by name; the register is otherwise conversational. Segments follow PR
+#1's beats (hook, context, mechanism, evidence, caveat, payoff), and Stage 7
+now reads the beat to lift a hook and settle a caveat. This partially reverses
+D35 and is recorded as such.
+
+The first run of v11 (2026-09-18-d50) showed the cost of vivid writing: hooks
+invented props ("three names, addresses, phone numbers"), proportions ("never
+opened half" for 65 of 100), and one payoff inverted a finding ("skimmed
+thirty-five" when it read sixty-five). Three answers:
+
+- the prompt bans invented detail by name and keeps ranges as ranges;
+- D49's number check now reads "half", "a third", "a quarter" (within five
+  points of a stated share, or flagged);
+- **a second reader**: one fact-check call per segment (`prompts/factcheck`)
+  reads meaning against the digest and flags, never rewrites. On its first run
+  it caught the inversion and an unsupported "seventy times larger" for
+  $0.025 across three segments, with one noise flag (a rounding it disliked).
+
+**The figure camera (`render/panels.py`, `render/camera.py`).** A figure is
+found to be panels by recursive whitespace cuts, and a panel is offered to the
+script under a caption letter only when detection and caption agree on how many
+there are. When they do not, an over-split figure is merged back only if there is
+exactly one way to do it - a 2x2 grid that should be three panels merges four
+ways, and pointing the camera at the wrong panel under the right letter is worse
+than no camera. Across 165 lettered figures from past runs, 60 (36%) are
+offered. OCR on the printed panel letters would resolve most of the rest; not
+added, because it is a new system dependency on the Linux runner.
+
+The script sets `focus: ["b"]`; the clip shows the whole figure for ~1.1s,
+eases into the panel while the rest dims to the ground with an accent outline,
+then drifts 2.5% tighter while held. Up to three stops. Rendered from a 2x
+supersample frame by frame in Pillow (sub-pixel smooth; zoompan rounds to whole
+pixels and judders) and capped at 1.8x the figure's native resolution so a
+600-pixel figure is not blown up into porridge. Exact duration, falls back to
+the reveal or the still like every other moving slide.
+
+**Chapter colour.** Each paper wears its own accent - mint, rose, violet, all at
+6.9:1 or better on the ground - on D35's dark ground; the wrapper keeps the
+series blue, and BASE amber still means "the value compared against". The bridge
+is a full field of the incoming paper's colour (was a 12% tint, which read as one
+more dark slide), and the paper's title card is a chapter opener: a slab of the
+same colour with the chapter number set huge, the hook beside it, the academic
+title under it. Across the cut the colour appears to slide aside for the title.
+manim charts take the paper's accent through the clip spec. This reverses D35's
+single accent for papers, on the owner's explicit "too monotone"; reverting is
+the `PAPER_ACCENTS` list.
+
+**Smaller fixes.** manim chart labels were set with uneven letter spacing at
+small sizes (Pango lays out on a whole-pixel grid); text is now laid out at 4x
+and scaled down. `focus: null` from the model is read as no focus - its absence
+failed every segment of the first v11 run and cost $0.13.
+
+**Thumbnails.** Stage 9 composed text beside `usable_figures[0]`, usually the
+paper's dense overview page, which at feed size is grey texture. Now:
+
+- **text**: two to four words, optionally led by one number, with one word
+  marked `*like this*` for a highlighter block; written to complement the title,
+  not repeat it. Every number is checked against the digests in Stage 6 and an
+  option with an unbacked one is dropped, not flagged - a thumbnail has no
+  narration beside it to correct it;
+- **image**: the figure the episode itself featured, cropped to the panel the
+  camera visited when there is one;
+- **output**: `thumbnail.png` plus `thumbnail_2/3.png` for YouTube's Test &
+  Compare (up to three per video; it judges on watch time), and
+  `thumbnail_preview.png`, every option at 360, 246 and 168 pixels wide on a
+  dark ground, which is where the choice should be made.
+
+**Spend.** v11 script runs: $0.13 (failed on `focus: null`), $0.23, $0.20;
+fact-check replay $0.025; narration for the full re-render ~$0.44.
+
+## D51 - An opening title sequence, and why the backdrops never worked
+
+Owner, 2026-11-27: the "ML Papers of the Day" slide "is still too boring. it
+needs to be original and captivating", and "whats up with the gpt image 1
+failure? ... the key should be fine".
+
+**The key was fine; the model was gone.** Every backdrop request since D39
+returned `400 The model 'gpt-image-1' does not exist` (`param: model`). OpenAI
+retired it; the key authenticates and `GET /v1/models` lists `gpt-image-2`,
+`gpt-image-1.5`, `gpt-image-1-mini` and newer variants. `render.backdrop_model`
+is now `gpt-image-2`. Because the failure was logged as a warning and the card
+fell back to flat ground by design, it shipped invisibly for every episode; a
+"does not exist" error is now logged as an error naming the setting to change.
+One medium 1536x1024 image measured 1,372 output image tokens; priced in
+`pricing.yaml` at $0.055, unverified.
+
+**The opener is a title sequence, not a card.** `render/opener.py`: ~3 seconds,
+fading up from black onto series artwork with a slow push toward its light,
+"ML Papers" then "of the Day" rising in, an accent rule wiping in under them
+and a kicker ("Three new papers"). The artwork is a **series asset**,
+`assets/opener/opener.png`, generated once with `gpt-image-2` and committed - a
+show has one opening, and regenerating it weekly would cost money and lose the
+identity. Swap the file to change it; delete it and the old title card returns.
+
+The wrapper's other title cards (the thesis, the outro) take backdrops in the
+same visual family - the D39 prompt asked for near-black texture and the
+composite then darkened it further, so the images were barely visible; the
+style block now matches the opener and the push-back is lighter. Paper title
+cards are chapter cards (D50) and no longer request a backdrop at all.
+
+**The cold open's number is drawn at its size.** `result_callout` capped type at
+132px whatever it held, so "69.5%" - the episode's single biggest number - sat
+small in an empty frame. Type now starts at 300px for up to eight characters.
+
+**A test leak that billed.** The CLI tests call `load_dotenv()`, which put the
+real `OPENAI_API_KEY` into the environment for every later test. While
+`gpt-image-1` was dead that cost nothing; the moment `gpt-image-2` worked, the
+render tests generated real images - about fifteen across three suite runs
+(~$0.80 at the unverified price) before the slowdown (28s -> 140s) gave it away.
+`tests/conftest.py` now clears every provider key and stubs `load_dotenv` for
+every test.
+
+**Spend:** ~25 images at ~$0.055 - one test image, six on the first render
+(three of them for chapter cards that never drew them), ~15 from the test leak,
+three on the final render - about $1.38, unverified against OpenAI's billing.
+
+## D52 - Illustrated thumbnails: a concept, a picture, and a fact check
+
+Owner, 2026-11-27, on the D50 thumbnails: "the only thing that's still mediocre."
+Text beside a cropped paper figure was accurate and legible and gave nobody a
+reason to stop scrolling. What breakout thumbnails share is one bold subject with
+an expression (a face in 69% of vidIQ's set); a research channel has no
+presenter, so the subject is drawn.
+
+**A concept is text plus a visual metaphor** (`prompts/thumbnail/v2`): "Memory
+*fabricates* 96% of doctors" with "a chatbot confidently handing a worried
+patient business cards that dissolve into smoke". The metaphor is an
+illustration, never evidence - no charts, numbers, text, logos, real products or
+real people - and a fixed style block (`thumbs.THUMB_STYLE`) keeps the series
+looking like one channel. Each concept's scene is drawn by `gpt-image-2`; the
+text goes over a fade on the left with a stroke so it reads at 168px, the one
+highlighted word on a block of the accent, and any number in the accent.
+
+**Draft, check, revise.** The model proposes five concepts. Each is screened:
+at most four words besides the number (the first run's five-word option was
+unreadable at phone size); every number backed by a digest (D49); and the
+meaning read against the digests by the D50 fact-check prompt, because the
+number check alone passed "80% *lie* about work done" when the digest's 80% is
+of *incomplete* runs. If fewer than three survive - rejected, or the model simply
+returned fewer, which it did once - the rejected ones go back once with their
+reasons. Two or three text calls and three images: about $0.20 an episode.
+
+Concepts are cached per run (`package/_thumbnail_art/concepts.json`), like the
+images, so re-packaging is free; delete the file to ask for new ones. Without an
+image key, or for any concept whose art fails, the D50 hero layout over the lead
+figure is used, so the stage never depends on an image model.
+
+**Spend getting here:** ~$0.17 in concept calls and ten images (~$0.55) across
+six attempts, while the screening was tuned on the 2026-09-18-d50 episode.
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit
