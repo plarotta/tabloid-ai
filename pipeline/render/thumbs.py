@@ -25,7 +25,7 @@ import logging
 import re
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 from .panels import find_panels
 from .slides import (
@@ -337,6 +337,17 @@ LAYOUTS = {
 
 # --- hero: the D50 thumbnail ---------------------------------------------------
 
+# Appended to every thumbnail scene. The scene is the idea; this is the look,
+# fixed so the channel's thumbnails read as one series (D52).
+THUMB_STYLE = (
+	"Bold, high-contrast 3D illustration for a YouTube thumbnail, glossy stylised "
+	"characters, cinematic rim lighting in electric blue, mint, rose and violet on "
+	"a deep navy background. One subject, large, filling the right 60% of the "
+	"frame, with an expression readable at a tiny size. The left 40% is darker and "
+	"simpler, for overlaid text. Absolutely no text, letters, numbers, logos, "
+	"charts, graphs, screens with writing, real products or real people."
+)
+
 _NUMBER = re.compile(r"^\s*([~<>]?\d[\d,.]*\s?(?:%|x|\u00d7|X)?)\s+(.*)$")
 
 
@@ -396,7 +407,6 @@ def hero(
 	its side of the frame on the paper-white it was drawn for.
 	"""
 	accent = accent or ACCENT
-	ink = BG
 	img = Image.new("RGB", (ctx.width, ctx.height), BG)
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(56)
@@ -419,16 +429,33 @@ def hero(
 		d.rectangle([x0 - ctx.scaled(12), 0, x0, ctx.height], fill=accent)
 		text_right = x0 - ctx.scaled(44)
 
+	_draw_hook(d, ctx, text, (m, m, text_right, ctx.height - m), accent, kicker)
+	return img
+
+
+def _draw_hook(
+	d: ImageDraw.ImageDraw,
+	ctx: SlideContext,
+	text: str,
+	box: tuple[int, int, int, int],
+	accent: tuple[int, int, int],
+	kicker: str = "",
+	stroke: int = 0,
+) -> None:
+	"""The hook, as large as `box` allows: a number in the accent, words in white,
+	one word on a highlighter block. `stroke` outlines the type in the ground
+	colour, which is what keeps it legible over an illustration."""
+	x0, y, x1, y1 = box
+	ink = BG
 	number, words, marked = parse_hook(text)
 	tokens = words.split()
-	box_w = text_right - m
-	y = m
+	box_w = x1 - x0
 	if kicker:
 		kf = bold(ctx.scaled(30))
-		d.text((m, y), kicker.upper(), font=kf, fill=accent)
+		d.text((x0, y), kicker.upper(), font=kf, fill=accent)
 		y += ctx.scaled(54)
 
-	avail = ctx.height - y - m
+	avail = y1 - y
 	blocks = []
 	if number:
 		nf = fit_text(d, number, _BOLD, box_w, int(avail * 0.58), start=ctx.scaled(300))[0]
@@ -447,16 +474,19 @@ def hero(
 		return int(len(b[2]) * b[1].size * 1.1)
 
 	total = sum(height(b) for b in blocks) + (ctx.scaled(26) if len(blocks) == 2 else 0)
-	y = max(y, (ctx.height - total) // 2)
+	y = max(y, y + (y1 - y - total) // 2)
 	for b in blocks:
 		if b[0] == "num":
 			_, nf, nb = b
-			d.text((m - nb[0], y - nb[1]), number, font=nf, fill=accent)
+			sw = max(int(nf.size * 0.035), 1) if stroke else 0
+			d.text((x0 - nb[0], y - nb[1]), number, font=nf, fill=accent, stroke_width=sw,
+				stroke_fill=ink)  # fmt: skip
 			y += (nb[3] - nb[1]) + ctx.scaled(26)
 			continue
 		_, wf, lines = b
+		sw = max(int(wf.size * 0.06), 1) if stroke else 0
 		for ln in lines:
-			x = m
+			x = x0
 			for j in ln:
 				w = tokens[j]
 				tw = d.textlength(w, font=wf)
@@ -466,9 +496,38 @@ def hero(
 					d.rectangle([bb[0] - pad, bb[1] - pad, bb[2] + pad, bb[3] + pad], fill=accent)
 					d.text((x, y), w, font=wf, fill=ink)
 				else:
-					d.text((x, y), w, font=wf, fill=FG)
+					# A number mid-phrase ("fabricates 96% of doctors") still pops.
+					colour = accent if any(ch.isdigit() for ch in w) else FG
+					d.text((x, y), w, font=wf, fill=colour, stroke_width=sw, stroke_fill=ink)
 				x += tw + d.textlength(" ", font=wf)
 			y += int(wf.size * 1.1)
+
+
+def illustrated(
+	ctx: SlideContext,
+	text: str,
+	art: Path,
+	accent: tuple[int, int, int] | None = None,
+) -> Image.Image | None:
+	"""The D52 thumbnail: a generated illustration full-bleed, the hook over a
+	fade on the left. None if the art will not open, and the caller falls back
+	to `hero`."""
+	accent = accent or ACCENT
+	try:
+		src = Image.open(art).convert("RGB")
+	except Exception as e:
+		log.warning("Thumbnail art %s unusable: %s", art, e)
+		return None
+	img = cover(src, ctx.width, ctx.height, focus=(0.6, 0.5))
+	img = ImageEnhance.Contrast(ImageEnhance.Color(img).enhance(1.15)).enhance(1.06)
+	# Opaque enough under the type to read at 168px, clear by the subject.
+	scrim(img, (0, 0, int(ctx.width * 0.62), ctx.height), horizontal=True, start=225, end=0)
+	d = ImageDraw.Draw(img)
+	m = ctx.scaled(52)
+	d.rectangle([0, 0, ctx.scaled(14), ctx.height], fill=accent)
+	# The scene puts its subject from 40% across; the type stops short of it.
+	_draw_hook(d, ctx, text, (m + ctx.scaled(10), m, int(ctx.width * 0.47), ctx.height - m), accent,
+		stroke=1)  # fmt: skip
 	return img
 
 

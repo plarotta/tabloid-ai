@@ -87,15 +87,42 @@ def generate(
 	Cached by prompt hash, so re-rendering a run is free and two title cards that
 	somehow ask for the same thing pay once.
 	"""
+	return generate_image(
+		prompt_for(subject),
+		cache_dir,
+		tracker=tracker,
+		stage=stage,
+		model=model,
+		size=size,
+		quality=quality,
+		timeout=timeout,
+		label=subject,
+	)
+
+
+def generate_image(
+	prompt: str,
+	cache_dir: Path,
+	tracker=None,
+	stage: str = "render",
+	model: str = "gpt-image-2",
+	size: str = "1536x1024",
+	quality: str = "medium",
+	timeout: int = 120,
+	label: str = "",
+) -> Path | None:
+	"""One generated image for `prompt`, cached by hash; None on any failure.
+
+	Shared by the title-card backdrops (D39) and the thumbnail art (D52).
+	"""
 	if not available():
 		return None
 
-	prompt = prompt_for(subject)
 	key = hashlib.sha256(f"{model}|{size}|{quality}|{prompt}".encode()).hexdigest()[:16]
 	cache_dir.mkdir(parents=True, exist_ok=True)
 	cached = cache_dir / f"{key}.png"
 	if cached.exists() and cached.stat().st_size > 0:
-		log.debug("Backdrop cache hit for %r", subject[:40])
+		log.debug("Image cache hit for %r", (label or prompt)[:40])
 		return cached
 
 	try:
@@ -105,22 +132,22 @@ def generate(
 		resp = client.images.generate(model=model, prompt=prompt, size=size, quality=quality, n=1)
 		payload = resp.data[0].b64_json if resp.data else None
 		if not payload:
-			log.warning("Image model returned no data; the title card stays flat")
+			log.warning("Image model returned no data for %r", (label or prompt)[:40])
 			return None
 		cached.write_bytes(base64.b64decode(payload))
 	except Exception as e:
-		# Includes refusals, rate limits, timeouts and SDK changes. A title card
-		# without a backdrop is the slide this pipeline shipped for four episodes.
 		if "does not exist" in str(e):
 			# Not a transient failure and not the key: OpenAI retires image models.
 			# This is how gpt-image-1 failed silently for every episode (D51).
 			log.error(
 				"Image model %r no longer exists for this key; set render.backdrop_model "
-				"to a current one (GET /v1/models lists them). The title card stays flat",
+				"to a current one (GET /v1/models lists them)",
 				model,
 			)
 			return None
-		log.warning("Backdrop generation failed (%s); the title card stays flat", e)
+		# Includes refusals, rate limits, timeouts and SDK changes. Every caller
+		# has a fallback that shipped for episodes before images existed.
+		log.warning("Image generation failed (%s)", e)
 		return None
 
 	if tracker is not None:
@@ -132,5 +159,5 @@ def generate(
 			output_units=0,
 			kind="image",
 		)
-	log.info("Backdrop generated for %r", subject[:48])
+	log.info("Image generated for %r", (label or prompt)[:48])
 	return cached

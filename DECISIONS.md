@@ -2272,6 +2272,40 @@ every test.
 (three of them for chapter cards that never drew them), ~15 from the test leak,
 three on the final render - about $1.38, unverified against OpenAI's billing.
 
+## D52 - Illustrated thumbnails: a concept, a picture, and a fact check
+
+Owner, 2026-11-27, on the D50 thumbnails: "the only thing that's still mediocre."
+Text beside a cropped paper figure was accurate and legible and gave nobody a
+reason to stop scrolling. What breakout thumbnails share is one bold subject with
+an expression (a face in 69% of vidIQ's set); a research channel has no
+presenter, so the subject is drawn.
+
+**A concept is text plus a visual metaphor** (`prompts/thumbnail/v2`): "Memory
+*fabricates* 96% of doctors" with "a chatbot confidently handing a worried
+patient business cards that dissolve into smoke". The metaphor is an
+illustration, never evidence - no charts, numbers, text, logos, real products or
+real people - and a fixed style block (`thumbs.THUMB_STYLE`) keeps the series
+looking like one channel. Each concept's scene is drawn by `gpt-image-2`; the
+text goes over a fade on the left with a stroke so it reads at 168px, the one
+highlighted word on a block of the accent, and any number in the accent.
+
+**Draft, check, revise.** The model proposes five concepts. Each is screened:
+at most four words besides the number (the first run's five-word option was
+unreadable at phone size); every number backed by a digest (D49); and the
+meaning read against the digests by the D50 fact-check prompt, because the
+number check alone passed "80% *lie* about work done" when the digest's 80% is
+of *incomplete* runs. If fewer than three survive - rejected, or the model simply
+returned fewer, which it did once - the rejected ones go back once with their
+reasons. Two or three text calls and three images: about $0.20 an episode.
+
+Concepts are cached per run (`package/_thumbnail_art/concepts.json`), like the
+images, so re-packaging is free; delete the file to ask for new ones. Without an
+image key, or for any concept whose art fails, the D50 hero layout over the lead
+figure is used, so the stage never depends on an image model.
+
+**Spend getting here:** ~$0.17 in concept calls and ten images (~$0.55) across
+six attempts, while the screening was tuned on the 2026-09-18-d50 episode.
+
 ## Deferred — not yet decided
 
 All ten stages are built. Nothing below blocks producing an episode; the audit

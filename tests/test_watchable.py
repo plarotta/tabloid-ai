@@ -316,3 +316,38 @@ def test_the_opener_is_a_title_sequence_of_exact_length(tmp_path):
 		render_opener(SlideContext(), "x", "", 2.0, tmp_path / "n.mp4", art=tmp_path / "no.png")
 		is None
 	)
+
+
+# --- D52: illustrated thumbnails -----------------------------------------------
+
+
+def test_a_concept_is_screened_for_length_numbers_and_meaning(ctx):
+	from pipeline.stages.package import PackageStage
+
+	backing = Digest("80% of incomplete runs were misleading. 96% of doctors were fabricated.")
+	flag = json.dumps({"flags": [{"scene": "t1", "problem": "80% is of incomplete runs"}]})
+	client = MeteredClient(_Checker(flag), ctx.tracker, "package")
+	raw = [
+		{"text": "80% *lie* about work", "scene": "a robot"},  # meaning: flagged
+		{"text": "Memory *fabricates* 96% of doctors", "scene": "a chatbot"},  # 4 words + number
+		{"text": "AI *invents* the whole medical directory", "scene": "x"},  # too long
+		{"text": "92% *never* check", "scene": "y"},  # 92 is not in the digest
+		{"text": "no scene here"},
+	]
+	kept, rejected = PackageStage(ctx)._screen(raw, backing, backing.text, client)
+	assert [c["text"] for c in kept] == ["Memory *fabricates* 96% of doctors"]
+	reasons = dict(rejected)
+	assert "four words" in reasons["AI *invents* the whole medical directory"]
+	assert "92" in reasons["92% *never* check"]
+	assert "incomplete" in reasons["80% *lie* about work"]
+
+
+def test_the_illustrated_thumbnail_fills_the_frame_and_keeps_the_accent(tmp_path):
+	from pipeline.render.thumbs import illustrated
+
+	art = tmp_path / "art.png"
+	Image.new("RGB", (1536, 1024), (30, 40, 90)).save(art)
+	img = illustrated(SlideContext(width=1280, height=720), "80% *never* read", art, (88, 212, 172))
+	assert img.size == (1280, 720)
+	assert (88, 212, 172) in {c for _, c in img.getcolors(1 << 20)}
+	assert illustrated(SlideContext(width=1280, height=720), "x", tmp_path / "none.png") is None

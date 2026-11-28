@@ -235,6 +235,15 @@ class RenderConfig(StrictModel):
 	music_db: float = -18.0
 
 
+class PackageConfig(StrictModel):
+	# Illustrated thumbnails (D52): a model proposes text + a visual metaphor per
+	# concept and an image model draws each. Needs OPENAI_API_KEY and the script
+	# model's key; on anything missing or failing, the D50 hero thumbnail.
+	thumbnail_art: bool = True
+	thumbnail_concepts: int = 3
+	thumbnail_quality: str = "medium"
+
+
 class UploadConfig(StrictModel):
 	# Off until the Google Cloud project passes the YouTube API compliance audit
 	# (SPEC.md Stage 10). Disabled means dry-run: validate and log, never call the
@@ -271,6 +280,7 @@ class Config(StrictModel):
 	models: dict[str, ModelSpec]
 	tts: TTSConfig = Field(default_factory=TTSConfig)
 	render: RenderConfig = Field(default_factory=RenderConfig)
+	package: PackageConfig = Field(default_factory=PackageConfig)
 	upload: UploadConfig = Field(default_factory=UploadConfig)
 
 	def model_for(self, stage_key: str) -> ModelSpec:
