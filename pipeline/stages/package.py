@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..paths import read_json, write_json
-from ..render.slides import SlideContext, thumbnail
+from ..render.slides import SlideContext
 from ..schemas import PackageResult
 from ..stage import Stage, StageError
 from .script import SERIES_NAME, YOUTUBE_TITLE_MAX
@@ -123,36 +123,241 @@ class PackageStage(Stage):
 	def load(self) -> PackageResult:
 		return PackageResult.model_validate(read_json(self.paths.output_dir / "metadata.json"))
 
-	def _thumbnail(self, script, enriched: dict, out: Path) -> str | None:
-		"""Template + the top-ranked paper's best figure."""
-		text = ""
-		if script.episode.thumbnail_text_options:
-			# The model is asked for three; the first is its own preferred pick.
-			text = script.episode.thumbnail_text_options[0]
-		text = text or script.episode.title or "New AI papers"
+	def _lead_figure(self, script, enriched: dict) -> tuple[Path | None, tuple | None]:
+		"""The figure the episode itself featured, and the panel it zoomed into.
 
-		figure = None
+		Was `usable_figures[0]`: the paper's first figure, which is usually its
+		dense overview page and at feed size reads as grey texture. A figure the
+		script chose - and better, a panel it pointed the camera at - is the one
+		image the episode already decided was worth looking at.
+		"""
+		from ..render.camera import caption_for
+		from ..render.panels import lettered_panels
+		from ..render.thumbs import load_figure
+
+		for seg in script.segments:
+			root = self.paths.enriched_dir / seg.arxiv_id.replace("/", "_")
+			figs = [
+				s.visual for s in seg.scenes if s.visual.type == "figure" and s.visual.figure_file
+			]
+			figs.sort(key=lambda v: not v.focus)
+			for v in figs:
+				path = root / v.figure_file
+				if not path.exists():
+					continue
+				if v.focus:
+					img = load_figure(path)
+					panels = (
+						lettered_panels(img, caption_for(root / "figures", v.figure_file))
+						if img
+						else {}
+					)
+					if v.focus[0] in panels:
+						return path, panels[v.focus[0]].box
+				return path, None
 		if script.segments:
 			paper = enriched.get(script.segments[0].arxiv_id)
-			if paper is not None:
-				usable = paper.usable_figures
-				if usable:
-					candidate = (
-						self.paths.enriched_dir / paper.arxiv_id.replace("/", "_") / usable[0].file
-					)
-					if candidate.exists():
-						figure = candidate
+			if paper is not None and paper.usable_figures:
+				root = self.paths.enriched_dir / paper.arxiv_id.replace("/", "_")
+				path = root / paper.usable_figures[0].file
+				if path.exists():
+					return path, None
+		return None, None
 
+	def _concepts(self, script) -> list[dict]:
+		"""Thumbnail concepts - text plus a visual metaphor - from the papers (D52).
+
+		Draft, check, revise: the model proposes five; each is checked for length,
+		for numbers the digests back (D49) and for meaning (the D50 fact check);
+		if fewer than the target survive, the rejected ones go back once with the
+		reason, and the replacements face the same checks. Two or three calls on
+		the script model, ~2 cents. [] on any failure.
+		"""
+		from ..llm import MeteredClient
+		from ..numbers import Digest
+		from ..prompts import load_prompt
+		from .extract import ExtractStage
+		from .script import digest_to_prompt_text
+
+		want = self.config.package.thumbnail_concepts
+		try:
+			digests = ExtractStage(self.ctx).load().digests
+			wanted = {m.arxiv_id for m in script.segments}
+			digests = [d for d in digests if d.arxiv_id in wanted] or digests
+			texts = {d.arxiv_id: digest_to_prompt_text(d) for d in digests}
+			spec = self.config.model_for(self.config.script.stage_model)
+			client = MeteredClient.for_stage(spec, self.tracker, self.name)
+			system, user = load_prompt("thumbnail").render(
+				title=script.episode.title,
+				digests="\n\n".join(f"---\narxiv_id: {k}\n{v}" for k, v in texts.items()),
+				existing_options="\n".join(f"- {t}" for t in script.episode.thumbnail_text_options)
+				or "(none)",
+			)
+		except Exception as e:
+			log.warning("Thumbnail concepts failed (%s); using the text options", e)
+			return []
+
+		backing = Digest("\n".join(texts.values()))
+		digest_text = "\n\n".join(texts.values())
+		kept, rejected = self._screen(self._ask(client, system, user), backing, digest_text, client)
+		if len(kept) < want:
+			# Short either way - concepts rejected, or the model returned fewer than
+			# asked (it does, at this temperature) - so ask once more.
+			feedback = "\n".join(f"- {t!r} was rejected: {why}" for t, why in rejected)
+			kept_list = "\n".join(f"- {c['text']!r} (kept)" for c in kept)
+			retry = (
+				f"{user}\n\nWrite {want - len(kept) + 2} more concepts, different from "
+				f"these:\n{kept_list}\n{feedback}\nFix any rejection reason given."
+			)
+			more, _ = self._screen(self._ask(client, system, retry), backing, digest_text, client)
+			kept += more
+		return kept[:want]
+
+	def _ask(self, client, system: str, user: str) -> list[dict]:
+		from ..llm import parse_json_response
+
+		try:
+			resp = client.complete(user, system=system, max_tokens=2048, temperature=0.7)
+			payload = parse_json_response(resp.text)
+			return payload.get("concepts", []) if isinstance(payload, dict) else []
+		except Exception as e:
+			log.warning("Thumbnail concept call failed (%s)", e)
+			return []
+
+	def _screen(
+		self, raw: list[dict], backing, digest_text: str, client
+	) -> tuple[list[dict], list[tuple[str, str]]]:
+		"""(passing concepts, [(text, why rejected)]) - length, numbers, meaning."""
+		from ..numbers import unbacked
+		from ..render.thumbs import parse_hook
+
+		passing, rejected = [], []
+		for c in raw:
+			text, scene = str(c.get("text", "")).strip(), str(c.get("scene", "")).strip()
+			if not text or not scene:
+				continue
+			words = [w for w in parse_hook(text)[1].split() if not any(ch.isdigit() for ch in w)]
+			if len(words) > 4:
+				rejected.append((text, "more than four words besides the number"))
+				continue
+			bad = unbacked(text.replace("*", ""), backing)
+			if bad:
+				rejected.append((text, f"{', '.join(bad)} is not in any paper's digest"))
+				continue
+			passing.append({"text": text, "scene": scene, "arxiv_id": c.get("arxiv_id", "")})
+		flags = self._check_meaning(passing, digest_text, client)
+		for text, why in flags:
+			rejected.append((text, why))
+		passing = [c for c in passing if c["text"] not in {t for t, _ in flags}]
+		for text, why in rejected:
+			log.warning("Thumbnail concept %r rejected: %s", text, why[:160])
+		return passing, rejected
+
+	def _check_meaning(self, concepts: list[dict], digest_text: str, client) -> list[tuple]:
+		"""The script's second reader (D50), on the thumbnail text (D52). Returns
+		[(text, problem)] for each concept it flags.
+
+		The number check passes "80% lie about work done" - 80 is in the digest -
+		but the digest's 80% is of *incomplete* runs. A thumbnail has no narration
+		beside it to correct it, so a flagged concept is never used.
+		"""
+		from ..llm import parse_json_response
+		from ..prompts import load_prompt
+
+		if not concepts or not self.config.script.fact_check:
+			return []
+		try:
+			system, user = load_prompt("factcheck").render(
+				digest=digest_text,
+				scenes="\n".join(
+					f"t{i + 1}: (thumbnail text, read with no context) {c['text'].replace('*', '')}"
+					for i, c in enumerate(concepts)
+				),
+			)
+			resp = client.complete(user, system=system, max_tokens=1024, temperature=0.0)
+			payload = parse_json_response(resp.text)
+			flags = payload.get("flags", []) if isinstance(payload, dict) else []
+		except Exception as e:
+			log.warning("Thumbnail fact check did not run (%s)", e)
+			return []
+		by_tag = {f"t{i + 1}": c["text"] for i, c in enumerate(concepts)}
+		return [
+			(by_tag[str(f.get("scene"))], str(f.get("problem", "")))
+			for f in flags
+			if str(f.get("scene")) in by_tag
+		]
+
+	def _thumbnail(
+		self, script, enriched: dict, out: Path
+	) -> tuple[str | None, list[str], str | None]:
+		"""Up to three thumbnails plus a preview sheet at feed sizes.
+
+		Illustrated when it can be (D52): each concept's scene drawn by the image
+		model, its text over it. Any concept whose art fails - and every one, when
+		there is no key - falls back to the D50 hero layout over the lead figure.
+		"""
+		from ..render import backdrop
+		from ..render.slides import PAPER_ACCENTS
+		from ..render.thumbs import THUMB_STYLE, hero, illustrated, preview_sheet
+
+		cfg = self.config.package
+		art_dir = self.paths.stage_dir("package") / "_thumbnail_art"
+		cache = art_dir / "concepts.json"
+		concepts: list[dict] = []
+		if cfg.thumbnail_art and backdrop.available():
+			# Cached per run, like every image: re-packaging is free, and deleting
+			# this file is how to ask for new concepts.
+			if cache.exists():
+				concepts = read_json(cache)
+			else:
+				concepts = self._concepts(script)
+				if concepts:
+					write_json(cache, concepts)
+		options = [c["text"] for c in concepts] or [
+			t for t in script.episode.thumbnail_text_options if t.strip()
+		][:3]
+		if not options:
+			options = [script.episode.title or "New AI papers"]
+		figure, panel = self._lead_figure(script, enriched)
 		ctx = SlideContext(width=THUMB_W, height=THUMB_H)
-		img = thumbnail(ctx, text, figure, kicker="arXiv this week")
-		path = out / "thumbnail.png"
-		img.save(path, "PNG")
 
-		size_kb = path.stat().st_size / 1024
-		if size_kb > 2048:
-			log.warning("Thumbnail is %.0f KB, over YouTube's 2 MB limit", size_kb)
-		log.info("Thumbnail: %s (%.0f KB)%s", path.name, size_kb, "" if figure else " [no figure]")
-		return path.name
+		names, images = [], []
+		for i, text in enumerate(options):
+			accent = PAPER_ACCENTS[i % len(PAPER_ACCENTS)]
+			img = None
+			if i < len(concepts):
+				art = backdrop.generate_image(
+					f"{concepts[i]['scene']} {THUMB_STYLE}",
+					art_dir,
+					tracker=self.tracker,
+					stage=self.name,
+					model=self.config.render.backdrop_model,
+					quality=cfg.thumbnail_quality,
+					label=f"thumbnail: {text}",
+				)
+				img = illustrated(ctx, text, art, accent=accent) if art else None
+			if img is None:
+				img = hero(ctx, text, figure, accent=accent, panel=panel)
+			name = "thumbnail.png" if i == 0 else f"thumbnail_{i + 1}.png"
+			path = out / name
+			img.save(path, "PNG")
+			if path.stat().st_size > 2 * 1024 * 1024:
+				# YouTube's limit. A painterly illustration can exceed it as PNG.
+				jpg = path.with_suffix(".jpg")
+				img.convert("RGB").save(jpg, "JPEG", quality=92)
+				path.unlink()
+				name = jpg.name
+			names.append(name)
+			images.append(img)
+		preview = out / "thumbnail_preview.png"
+		preview_sheet(images, [n.rsplit(".", 1)[0] for n in names]).save(preview)
+		log.info(
+			"Thumbnails: %s (%s illustrated); compare them at feed size in %s",
+			", ".join(names),
+			min(len(concepts), len(names)),
+			preview.name,
+		)
+		return names[0], names[1:], preview.name
 
 	def run(self) -> PackageResult:
 		from .enrich import EnrichStage
@@ -204,6 +409,7 @@ class PackageStage(Stage):
 		shutil.copy2(self.paths.cost_report_json, out / "cost_report.json")
 
 		number = self._episode_number(out)
+		thumb, variants, preview = self._thumbnail(script, enriched, out)
 		result = PackageResult(
 			generated_at=datetime.now(UTC),
 			episode_number=number,
@@ -212,7 +418,9 @@ class PackageStage(Stage):
 			thumbnail_text_options=list(script.episode.thumbnail_text_options),
 			episode_file=episode_name,
 			segment_files=copied,
-			thumbnail_file=self._thumbnail(script, enriched, out),
+			thumbnail_file=thumb,
+			thumbnail_variants=variants,
+			thumbnail_preview=preview,
 			duration_seconds=round(elapsed, 3),
 			chapters=chapters,
 			total_cost_usd=report.total_usd,

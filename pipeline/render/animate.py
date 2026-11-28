@@ -57,6 +57,7 @@ def build_spec(comparison: Comparison, ctx: SlideContext, duration: float, fps: 
 		duration=round(duration, 4),
 		fps=fps,
 		bg=list(BG),
+		accent=list(ctx.accent),
 		brace=list(FAINT),
 		eyebrow=ctx.eyebrow,
 		arxiv_id=ctx.arxiv_id,

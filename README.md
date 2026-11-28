@@ -75,7 +75,7 @@ pipeline cost --run 2026-08-07       # view the cost report
 pipeline youtube-auth                # one-time OAuth; prints a refresh token
 
 # The upload-ready bundle lands in runs/<date>/output/:
-#   episode.mp4  segment_<id>.mp4 x3  thumbnail.png  metadata.json  cost_report.json
+#   episode.mp4  segment_<id>.mp4 x3  thumbnail.png (+ _2, _3, _preview)  metadata.json  cost_report.json
 #   upload.json  <- stage 10: what was (or would be) sent to YouTube
 ```
 
@@ -367,17 +367,32 @@ the standalone segment, which has to be publishable on its own (D26).
   now a distinct error that is never retried and never degraded around, and the
   script stage fails at its boundary instead (D35). The same broad handlers still
   exist in the other LLM stages.
-- **The visual system flipped back.** Near-black ground and a single accent, as
-  in episode one (D35), reversing the paper-white ground and per-paper accents of
-  D27. Both palettes are recorded; the swap is six constants in
-  `render/slides.py`. The ground is since lifted slightly off black, and a sixth
-  palette role — `BASE`, for the value a comparison is measured against — was
-  added but is not yet drawn by any static slide type (D36).
+- **Each paper has its own colour again.** Near-black ground (D35) with a
+  chapter accent per paper - mint, rose, violet - and the series blue for the
+  wrapper; the bridge is a full field of the next paper's colour and its title
+  card a numbered chapter opener (D50). This reverses D35's single accent on the
+  owner's "too monotone"; reverting is the `PAPER_ACCENTS` list in
+  `render/slides.py`. `BASE` amber still marks the value compared against (D36).
+- **The figure camera only goes where it is sure.** A figure's panels are
+  offered to the script under the caption's letters only when detection and
+  caption agree; about a third of lettered figures qualify, and the rest are
+  shown whole. A wrong panel under the right letter would be worse (D50).
+- **The narration is conversational, and has a second reader.** Script v11 opens
+  on a concrete case and answers it at the end. Vivid writing invents detail, so
+  each segment is fact-checked against its digest by a second model call
+  (~2 cents); a flagged line is marked ⚠ **fact check** in
+  `script/segment_*.md` and left in the episode. Read those before publishing.
+  Thumbnail text is held to the digests' numbers, but not yet to their meaning:
+  check that the option you pick says what the paper measured (D50).
 - **Animated callouts are tested on Linux, but have not shipped from it.** CI
   installs cairo, pango and manim and renders all twenty-one templates
   (`tests/test_templates.py`, failing rather than skipping there). No
   scheduled episode has yet run on the runner, and Arial is absent on Linux, so
   pango substitutes a fallback face for the callouts' type (D37, D46).
+- **Numbers outside the charts are flagged, not blocked.** Narration and
+  on-screen text are checked against the digest (stated, or arithmetic on what
+  it states). A miss marks the scene ⚠ in `script/segment_*.md` and leaves it in
+  the episode: read those flags before publishing (D49).
 - **Three templates draw labels and no numbers.** `flow`, `cycle` and `versus`
   have nothing for the digest check to verify; a true phrase on the wrong box
   reads as a claim about that box. The prompt rule is the whole defence (D46).

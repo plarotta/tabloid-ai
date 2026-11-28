@@ -52,15 +52,20 @@ FAINT = (58, 64, 76)  # rules and inactive progress
 ACCENT = (122, 162, 247)  # the single accent colour
 CARD = (250, 250, 248)  # the light card figures sit on
 
-# Kept as a list of one. D27 gave each paper its own hue off the running order;
-# a single accent is what episode one had and what the owner asked for back. The
-# list survives because Stage 8 indexes it by running order, and collapsing that
-# to a constant would delete the seam a future per-paper palette hangs on.
-PAPER_ACCENTS = [ACCENT]
+# One colour per paper, by running order (D50, on the owner's "too monotone",
+# 2026-11-27). D27 tried this on a paper-white ground and D35 took it back with
+# the ground; this keeps D35's near-black ground and its single series accent
+# for the wrapper, and gives each paper a chapter colour on top. All three sit
+# at similar lightness so none reads as the "important" paper, and none is near
+# BASE's amber, which still means "the value being compared against" (D36).
+PAPER_ACCENTS = [
+	(88, 212, 172),  # mint
+	(247, 126, 156),  # rose
+	(170, 146, 255),  # violet
+]
 
-# The wrapper wore a neutral graphite under D27 so it read as the frame rather
-# than a fourth chapter. With one accent across the episode there is nothing for
-# it to contrast against, so it takes the same accent as everything else.
+# The wrapper - cold open, outro - wears the series blue: it is the frame
+# around the papers, not a fourth chapter.
 SERIES_ACCENT = ACCENT
 
 
@@ -317,8 +322,10 @@ def backdrop_ground(ctx: SlideContext, path: Path) -> Image.Image:
 		log.warning("Backdrop %s unusable (%s); using the flat ground", path, e)
 		return Image.new("RGB", (ctx.width, ctx.height), BG)
 
-	art = ImageEnhance.Color(art).enhance(0.35)
-	art = ImageEnhance.Brightness(art).enhance(0.62)
+	# Pushed back less than D39 did (0.35 / 0.62): with the opener's artwork on
+	# the right third only, the scrim alone keeps the type legible (D51).
+	art = ImageEnhance.Color(art).enhance(0.8)
+	art = ImageEnhance.Brightness(art).enhance(0.85)
 
 	# One row of the gradient, stretched: the scrim varies across x only.
 	row = Image.new("L", (ctx.width, 1))
@@ -335,7 +342,16 @@ def backdrop_ground(ctx: SlideContext, path: Path) -> Image.Image:
 def title_card(
 	ctx: SlideContext, title: str, subtitle: str = "", backdrop: Path | None = None
 ) -> Image.Image:
-	"""Opens every segment, so it carries the paper's hook and nothing else."""
+	"""Opens every segment, so it carries the paper's hook and nothing else.
+
+	A paper's title card is a chapter opener (D50): a slab of the paper's colour
+	down the left with the chapter number set huge in it, and the hook beside
+	it. The bridge before it is a full field of the same colour, so across the
+	cut the colour appears to slide aside and make room for the title. Only the
+	wrapper's title cards (no paper) take a generated backdrop (D39).
+	"""
+	if ctx.paper_index is not None:
+		return _chapter_card(ctx, title, subtitle)
 	img = (
 		backdrop_ground(ctx, backdrop)
 		if backdrop is not None
@@ -347,11 +363,11 @@ def title_card(
 
 	# Sized to command the frame. A title card holds for four seconds with nothing
 	# else on it, so type that merely fits reads as an empty slide.
-	font, lines = fit_text(d, title or "", _BOLD, box, ctx.fitted(620), start=ctx.scaled(124))
+	font, lines = fit_text(d, title or "", _BOLD, box, ctx.fitted(620), start=ctx.scaled(132))
 	sf = regular(ctx.scaled(36))
 	sub_lines = wrap(d, subtitle, sf, box) if subtitle else []
 
-	rule_h = ctx.scaled(10)
+	rule_h = ctx.scaled(12)
 	gap = ctx.scaled(46)
 	total = rule_h + gap + block_height(lines, font)
 	if sub_lines:
@@ -360,12 +376,48 @@ def title_card(
 	# Optically centred: a title block reads better slightly above true centre.
 	y = max(int((ctx.content_height - total) / 2) - ctx.scaled(30), ctx.scaled(120))
 
-	d.rectangle([m, y, m + ctx.scaled(132), y + rule_h], fill=ctx.accent)
+	d.rectangle([m, y, m + ctx.scaled(160), y + rule_h], fill=ctx.accent)
 	y = draw_lines(d, lines, font, m, y + rule_h + gap, FG)
 	if sub_lines:
 		draw_lines(d, sub_lines, sf, m, y + ctx.scaled(30), DIM, 1.35)
 
 	chrome(d, ctx, show_eyebrow=False)
+	return img
+
+
+def _chapter_card(ctx: SlideContext, title: str, subtitle: str = "") -> Image.Image:
+	img = Image.new("RGB", (ctx.width, ctx.height), BG)
+	d = ImageDraw.Draw(img)
+	slab = int(ctx.width * 0.30)
+	d.rectangle([0, 0, slab, ctx.height], fill=ctx.accent)
+
+	# The chapter number, set big enough to be a shape before it is a number.
+	num = f"{(ctx.paper_index or 0) + 1:02d}"
+	nf = bold(ctx.scaled(330))
+	nb = d.textbbox((0, 0), num, font=nf)
+	nx = (slab - (nb[2] - nb[0])) / 2 - nb[0]
+	ny = ctx.content_height - ctx.scaled(110) - nb[3]
+	d.text((nx, ny), num, font=nf, fill=mix(ctx.accent, BG, 0.82))
+	kf = bold(ctx.scaled(30))
+	_draw_tracked(
+		d, "PAPER", kf, nx + nb[0] + ctx.scaled(8), ny + nb[1] - ctx.scaled(56),
+		mix(ctx.accent, BG, 0.82), ctx.scaled(6),
+	)  # fmt: skip
+
+	m = ctx.scaled(MARGIN)
+	x = slab + ctx.scaled(96)
+	box = ctx.width - x - m
+	font, lines = fit_text(d, title or "", _BOLD, box, ctx.fitted(560), start=ctx.scaled(128))
+	sf = regular(ctx.scaled(32))
+	label = subtitle or ctx.eyebrow
+	sub_lines = wrap(d, label, sf, box)[:2] if label else []
+	total = block_height(lines, font) + (
+		ctx.scaled(44) + block_height(sub_lines, sf, 1.35) if sub_lines else 0
+	)
+	y = max(int((ctx.content_height - total) / 2) - ctx.scaled(20), ctx.scaled(110))
+	y = draw_lines(d, lines, font, x, y, FG)
+	if sub_lines:
+		draw_lines(d, sub_lines, sf, x, y + ctx.scaled(44), DIM, 1.35)
 	return img
 
 
@@ -382,31 +434,27 @@ def _draw_tracked(draw, text: str, font, x: float, y: float, fill, tracking: int
 
 
 def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Image:
-	"""The bridge between two parts of the episode.
+	"""The bridge between two parts of the episode: a full field of the incoming
+	paper's colour.
 
-	Deliberately the one slide type that does not sit on `BG`. Its job is to be
-	unmistakably not-a-segment for the few seconds it holds: without a change of
-	ground it would read as one more title card, which is exactly the "one long
-	PowerPoint deck" the owner review described.
-
-	The wash is the *incoming* paper's accent, so the colour of the next chapter
-	arrives a beat before the chapter does.
+	Deliberately the one slide that is not on `BG`. It was a 12% tint of the
+	accent until D50, and a tint read as one more dark slide - "the visuals are
+	too monotone" (owner, 2026-11-27). A full field is unmistakably a chapter
+	break, and the title card that follows keeps a slab of the same colour, so
+	the colour arrives with the bridge and stays for the title.
 	"""
-	img = Image.new("RGB", (ctx.width, ctx.height), tint(ctx.accent))
+	ground = ctx.accent
+	ink = mix(ctx.accent, BG, 0.86)
+	img = Image.new("RGB", (ctx.width, ctx.height), ground)
 	d = ImageDraw.Draw(img)
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, label or "", _BOLD, box, ctx.fitted(300), start=ctx.scaled(84))
-	mf = bold(ctx.scaled(30))
-	tracking = ctx.scaled(7)
-
-	rule_h = max(ctx.scaled(3), 1)
-	gap = ctx.scaled(44)
-	# More room under the label than above it: the rule has to clear descenders,
-	# which the line-height alone does not guarantee.
-	under = int(gap * 1.5)
-	total = block_height(lines, font) + under + rule_h
+	font, lines = fit_text(d, label or "", _BOLD, box, ctx.fitted(340), start=ctx.scaled(120))
+	mf = bold(ctx.scaled(34))
+	tracking = ctx.scaled(8)
+	gap = ctx.scaled(40)
+	total = block_height(lines, font)
 	if marker:
 		total += int(mf.size * 1.2) + gap
 	y = max(int((ctx.content_height - total) / 2), ctx.scaled(120))
@@ -418,23 +466,15 @@ def transition_card(ctx: SlideContext, label: str, marker: str = "") -> Image.Im
 			mf,
 			(ctx.width - _tracked_width(d, marker, mf, tracking)) / 2,
 			y,
-			ctx.accent,
+			ink,
 			tracking,
 		)
 		y += int(mf.size * 1.2) + gap
 
 	for line in lines:
 		w = d.textlength(line, font=font)
-		d.text(((ctx.width - w) / 2, y), line, font=font, fill=FG)
-		y += int(font.size * 1.26)
-
-	# A rule that runs most of the frame, unlike the short accent mark a title
-	# card opens with - the two must not be mistaken for each other.
-	y += under
-	rw = int(ctx.width * 0.62)
-	d.rectangle([(ctx.width - rw) / 2, y, (ctx.width + rw) / 2, y + rule_h], fill=ctx.accent)
-
-	chrome(d, ctx, show_eyebrow=False)
+		d.text(((ctx.width - w) / 2, y), line, font=font, fill=ink)
+		y += int(font.size * 1.18)
 	return img
 
 
@@ -545,7 +585,12 @@ def result_callout(
 	m = ctx.scaled(MARGIN)
 	box = ctx.width - 2 * m
 
-	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.fitted(430), start=ctx.scaled(132))
+	# Sized to what it holds (D51). A flat 132px cap drew a bare "69.5%" at the
+	# size of an eight-word phrase, a small number adrift in the frame - and the
+	# cold open's third scene is exactly that: the episode's biggest number.
+	n = len(highlight or "")
+	start = 300 if n <= 8 else 200 if n <= 18 else 132
+	font, lines = fit_text(d, highlight or "", _BOLD, box, ctx.fitted(430), start=ctx.scaled(start))
 	cf = regular(ctx.scaled(34))
 	cap_lines = wrap(d, caption, cf, int(box * 0.8)) if caption else []
 
@@ -578,6 +623,11 @@ def result_callout(
 
 
 def _trim_border(fig: Image.Image) -> Image.Image:
+	box = _trim_box(fig)
+	return fig.crop(box) if box else fig
+
+
+def _trim_box(fig: Image.Image) -> tuple[int, int, int, int] | None:
 	"""Crop the uniform margin a paper figure is saved with.
 
 	Figures are cropped for a page, not a frame: a typical one carries an inch of
@@ -596,9 +646,9 @@ def _trim_border(fig: Image.Image) -> Image.Image:
 		flat = Image.new("RGB", fig.size, fig.convert("RGB").getpixel((0, 0)))
 		box = ImageChops.difference(fig.convert("RGB"), flat).getbbox()
 	except Exception:
-		return fig
+		return None
 	if not box:
-		return fig
+		return None
 	pad = max(int(min(fig.width, fig.height) * 0.01), 2)
 	left, top, right, bottom = box
 	left, top = max(left - pad, 0), max(top - pad, 0)
@@ -606,10 +656,10 @@ def _trim_border(fig: Image.Image) -> Image.Image:
 	w, h = right - left, bottom - top
 	# Not worth a crop, or the result is a sliver: leave it alone.
 	if w < fig.width * 0.25 or h < fig.height * 0.25:
-		return fig
+		return None
 	if w > fig.width * 0.97 and h > fig.height * 0.97:
-		return fig
-	return fig.crop((left, top, right, bottom))
+		return None
+	return (left, top, right, bottom)
 
 
 def figure_slide(
@@ -619,8 +669,14 @@ def figure_slide(
 	title: str = "",
 	caption: str = "",
 	reveal: bool = True,
+	placement: dict | None = None,
 ) -> Image.Image:
 	"""A paper figure on a white card, with its source burned in.
+
+	`placement`, when given, is filled with where the figure landed - its
+	top-left on the slide, the scale it was drawn at and the margin trimmed off
+	it - so the camera (render/camera.py) can map a panel of the source figure
+	onto the frame.
 
 	On the old near-black ground the card was doing rescue work: paper figures are
 	drawn for white paper and their black axes vanished against it. On the paper
@@ -665,7 +721,10 @@ def figure_slide(
 			fig = flat
 		else:
 			fig = fig.convert("RGB")
-		fig = _trim_border(fig)
+		trim = _trim_box(fig)
+		if trim:
+			fig = fig.crop(trim)
+		native = fig.size
 		# `thumbnail` only ever shrinks, so a figure saved small arrived small and
 		# sat marooned in the middle of the card. Scale to the card in both
 		# directions, capped at 2x native: past that a raster figure turns to
@@ -708,13 +767,15 @@ def figure_slide(
 	)
 
 	if fig is not None:
-		img.paste(
-			fig,
-			(
-				card[0] + (card_w - fig.width) // 2,
-				card[1] + pad,
-			),
-		)
+		origin = (card[0] + (card_w - fig.width) // 2, card[1] + pad)
+		img.paste(fig, origin)
+		if placement is not None:
+			placement.update(
+				origin=origin,
+				scale=fig.width / native[0],
+				trim=(trim[0], trim[1]) if trim else (0, 0),
+				size=fig.size,
+			)
 	else:
 		d.text(
 			(card[0] + pad, card[1] + pad),

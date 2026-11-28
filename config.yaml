@@ -247,7 +247,12 @@ render:
   # per episode; cached in runs/<id>/render/_backdrops so re-rendering is free.
   # Falls back to the flat card without OPENAI_API_KEY or on any failure.
   title_backdrops: true
-  backdrop_model: gpt-image-1
+  # Was gpt-image-1, which OpenAI has retired: every request since has come back
+  # 400 "The model 'gpt-image-1' does not exist" (diagnosed 2026-11-27, D51).
+  # With the chapter cards (D50) only the wrapper's title cards take one.
+  backdrop_model: gpt-image-2
+  # The cold open's first scene as a title sequence over assets/opener/ (D51).
+  opener: true
   # Off by default: no licensed track is shipped, and the synthesised fallback
   # reads as hum once audible. Drop a royalty-free file in assets/music/ and set
   # this to true. See DECISIONS.md D21.
